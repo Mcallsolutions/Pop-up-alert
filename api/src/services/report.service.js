@@ -22,7 +22,11 @@ const SANITIZED_CLIENT_KEY_SQL = `
       'TAG',
       'TAGS',
       'NAO IDENTIFICADO',
-      'CLIENTE NAO IDENTIFICADO'
+      'NãO IDENTIFICADO',
+      'NÃO IDENTIFICADO',
+      'CLIENTE NAO IDENTIFICADO',
+      'CLIENTE NãO IDENTIFICADO',
+      'CLIENTE NÃO IDENTIFICADO'
     ) THEN ''
     WHEN UPPER(TRIM(client_name)) LIKE 'SUPORTE-%' THEN ''
     WHEN UPPER(TRIM(client_name)) LIKE 'NETFIBRA%' THEN ''
@@ -159,15 +163,22 @@ function getReportByAttendant(filters = {}) {
             ORDER BY datetime(collected_at) DESC, id DESC
           ) AS rowNumber
         FROM filtered
+      ),
+      normalized AS (
+        SELECT
+          *,
+          ${caseSql} AS normalizedAttendant
+        FROM ranked
+        WHERE rowNumber = 1
       )
       SELECT
-        ${caseSql} AS attendant,
+        normalizedAttendant AS attendant,
         COUNT(*) AS totalTickets,
         SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS totalWithTag,
         SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS totalWithoutTag
-      FROM ranked
-      WHERE rowNumber = 1
-      GROUP BY ${caseSql}
+      FROM normalized
+      WHERE normalizedAttendant <> ''
+      GROUP BY normalizedAttendant
       ORDER BY totalWithoutTag DESC, totalTickets DESC
     `
     )
@@ -256,12 +267,17 @@ function sanitizeTicketRow(row) {
   return {
     ...row,
     clientName: sanitizeClientName(row.clientName),
-    attendant: normalizeAttendantName(row.attendant)
+    attendant: sanitizeAttendantName(row.attendant)
   };
 }
 
 function buildAttendantCaseSql() {
-  const clauses = getKnownAttendants()
+  const knownAttendants = getKnownAttendants();
+  if (!knownAttendants.length) {
+    return "''";
+  }
+
+  const clauses = knownAttendants
     .map((name) => {
       const canonical = escapeSqlLiteral(name);
       const upper = escapeSqlLiteral(name.toUpperCase());
@@ -274,7 +290,7 @@ function buildAttendantCaseSql() {
       return `WHEN UPPER(TRIM(attendant)) = '${upper}' ${companyClauses} THEN '${canonical}'`;
     })
     .join(" ");
-  return `CASE ${clauses} ELSE COALESCE(NULLIF(attendant, ''), 'Nao identificado') END`;
+  return `CASE ${clauses} ELSE '' END`;
 }
 
 function escapeSqlLiteral(value) {
@@ -287,12 +303,18 @@ function sanitizeClientName(value) {
   if (isKnownAttendant(text)) return "";
   if (/^Suporte\s*-/i.test(text)) return "";
   if (/^(NETFIBRA|MIX|IDEZ|TERRA|PLANET)\b/i.test(text)) return "";
-  if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|Nao identificado|Cliente nao identificado)$/i.test(text)) {
+  if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|N[aãÃ]o identificado|Cliente n[aãÃ]o identificado)$/i.test(text)) {
     return "";
   }
   if (/[.!?]/.test(text) && calculateUppercaseRatio(text) < 0.7) return "";
   if (/[a-z]{2,}\s+[a-z]{2,}/.test(text) && calculateUppercaseRatio(text) < 0.55) return "";
   return text;
+}
+
+function sanitizeAttendantName(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text || !isKnownAttendant(text)) return "";
+  return normalizeAttendantName(text);
 }
 
 function calculateUppercaseRatio(text) {

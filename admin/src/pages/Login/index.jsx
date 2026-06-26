@@ -3,8 +3,8 @@ import { LogIn } from "lucide-react";
 import { api } from "../../services/api";
 
 export default function Login({ onLogin }) {
-  const [email, setEmail] = useState("admin@mcall.local");
-  const [password, setPassword] = useState("admin123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -24,7 +24,7 @@ export default function Login({ onLogin }) {
 
   return (
     <main className="login-screen">
-      <form className="login-panel" onSubmit={handleSubmit}>
+      <form className="login-panel" onSubmit={handleSubmit} autoComplete="off">
         <div className="login-title">
           <span className="mark">M</span>
           <div>
@@ -35,7 +35,7 @@ export default function Login({ onLogin }) {
 
         <label>
           Email
-          <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="username" />
+          <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" autoComplete="off" required />
         </label>
 
         <label>
@@ -44,7 +44,8 @@ export default function Login({ onLogin }) {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             type="password"
-            autoComplete="current-password"
+            autoComplete="new-password"
+            required
           />
         </label>
 

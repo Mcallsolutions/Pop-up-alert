@@ -1,11 +1,9 @@
 (() => {
   const SCAN_INTERVAL_MS = 60 * 1000;
   const MUTATION_DEBOUNCE_MS = 1200;
-  const MISSING_TAG_ALERT_REPEAT_MS = 5 * 60 * 1000;
   const ALERT_ROOT_ID = "mcall-ticket-tag-alert-root";
   const PARSER_VERSION = "1.2.0";
 
-  const ticketAlertedAt = new Map();
   let scanTimer = null;
   let mutationTimer = null;
   let observer = null;
@@ -71,8 +69,7 @@
     const missingTickets = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG");
     const diagnostics = buildDiagnostics(reason, tickets);
 
-    pruneAlertHistory();
-    missingTickets.forEach(showMissingTagAlert);
+    renderMissingTagAlerts(missingTickets);
 
     const payload = {
       source: "mtalk",
@@ -356,31 +353,47 @@
   }
 
   function showMissingTagAlert(ticket) {
-    if (!ticket || !ticket.ticketKey) {
+    if (!ticket) {
       return;
     }
 
+    renderMissingTagAlerts([ticket]);
+  }
+
+  function renderMissingTagAlerts(tickets) {
     const now = Date.now();
-    const lastAlertedAt = ticketAlertedAt.get(ticket.ticketKey) || 0;
-    if (now - lastAlertedAt < MISSING_TAG_ALERT_REPEAT_MS) {
+    currentAlertTickets = getUniqueAlertTickets(tickets)
+      .map((ticket) => ({ ...ticket, alertedAt: now }))
+      .slice(0, 6);
+
+    if (!currentAlertTickets.length) {
+      document.getElementById(ALERT_ROOT_ID)?.remove();
       return;
     }
 
-    ticketAlertedAt.set(ticket.ticketKey, now);
-    currentAlertTickets = [{ ...ticket, alertedAt: now }, ...currentAlertTickets]
-      .filter((item, index, array) => array.findIndex((other) => other.ticketKey === item.ticketKey) === index)
-      .slice(0, 6);
     renderAlert();
   }
 
-  function pruneAlertHistory() {
-    const now = Date.now();
-    const maxAge = MISSING_TAG_ALERT_REPEAT_MS * 3;
-    for (const [ticketKey, alertedAt] of ticketAlertedAt.entries()) {
-      if (now - alertedAt > maxAge) {
-        ticketAlertedAt.delete(ticketKey);
+  function getUniqueAlertTickets(tickets) {
+    const seen = new Set();
+    return tickets.filter((ticket) => {
+      const alertKey = createAlertTicketKey(ticket);
+      if (!alertKey || seen.has(alertKey)) {
+        return false;
       }
+      seen.add(alertKey);
+      return true;
+    });
+  }
+
+  function createAlertTicketKey(ticket) {
+    const clientName = normalizeText(ticket?.clientName).toUpperCase();
+    if (clientName) {
+      return `CLIENT|${clientName}`;
     }
+
+    const ticketKey = normalizeText(ticket?.ticketKey).toUpperCase();
+    return ticketKey ? `TICKET|${ticketKey}` : "";
   }
 
   function renderAlert() {
@@ -504,27 +517,7 @@
 
   function findAttendant(lines, ignored) {
     const knownAttendant = lines.find((line) => isKnownAttendant(line) && !isIgnoredLine(line, ignored));
-    if (knownAttendant) {
-      return normalizeAttendantName(knownAttendant);
-    }
-
-    const companyIndex = lines.findIndex((line) => line === ignored.company);
-    if (companyIndex > 0) {
-      const beforeCompany = lines[companyIndex - 1];
-      if (looksLikePersonName(beforeCompany) && !isIgnoredLine(beforeCompany, ignored)) {
-        return normalizeAttendantName(beforeCompany);
-      }
-    }
-
-    const inferred = lines.find((line) => {
-      if (isIgnoredLine(line, ignored)) return false;
-      if (looksLikeAnyQueue(line)) return false;
-      if (getCompanyPrefix(line)) return false;
-      if (TAG_PATTERNS.some((pattern) => pattern.test(line))) return false;
-      return looksLikePersonName(line);
-    });
-
-    return normalizeAttendantName(inferred);
+    return knownAttendant ? normalizeAttendantName(knownAttendant) : "";
   }
 
   function findCompany(lines, tag) {
@@ -584,19 +577,12 @@
     if (getCompanyPrefix(line)) return false;
     if (TAG_PATTERNS.some((pattern) => pattern.test(line))) return false;
     if (TIME_PATTERN.test(line)) return false;
-    if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|Nao identificado|Cliente nao identificado)$/i.test(line)) {
+    if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|N[aãÃ]o identificado|Cliente n[aãÃ]o identificado)$/i.test(line)) {
       return false;
     }
     if (/[.!?]{1,}/.test(line) && calculateUppercaseRatio(line) < 0.7) return false;
     if (/[a-z]{2,}\s+[a-z]{2,}/.test(line) && calculateUppercaseRatio(line) < 0.55) return false;
     return /[A-Za-z]{3,}/.test(line);
-  }
-
-  function looksLikePersonName(line) {
-    if (!line || line.length < 3 || line.length > 55) return false;
-    if (isKnownAttendant(line)) return true;
-    if (!/[a-z]/.test(line)) return false;
-    return /^[A-Z][A-Za-z\s'.-]{1,54}$/.test(line);
   }
 
   function normalizeAttendantName(value) {

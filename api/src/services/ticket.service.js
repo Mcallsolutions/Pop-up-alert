@@ -129,7 +129,7 @@ function validateTicket(ticket) {
   const normalizedTicket = {
     clientName: cleanClientName(ticket?.clientName),
     queue,
-    attendant: normalizeAttendantName(ticket?.attendant).slice(0, 100),
+    attendant: cleanAttendantName(ticket?.attendant),
     company: cleanText(ticket?.company, 120),
     displayTime: cleanText(ticket?.displayTime, 20),
     tag,
@@ -179,12 +179,18 @@ function cleanClientName(value) {
   if (isKnownAttendant(text)) return "";
   if (/^Suporte\s*-/i.test(text)) return "";
   if (/^(NETFIBRA|MIX|IDEZ|TERRA|PLANET)\b/i.test(text)) return "";
-  if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|Nao identificado|Cliente nao identificado)$/i.test(text)) {
+  if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|N[aãÃ]o identificado|Cliente n[aãÃ]o identificado)$/i.test(text)) {
     return "";
   }
   if (/[.!?]/.test(text) && calculateUppercaseRatio(text) < 0.7) return "";
   if (/[a-z]{2,}\s+[a-z]{2,}/.test(text) && calculateUppercaseRatio(text) < 0.55) return "";
   return text;
+}
+
+function cleanAttendantName(value) {
+  const text = cleanText(value, 100);
+  if (!text || !isKnownAttendant(text)) return "";
+  return normalizeAttendantName(text).slice(0, 100);
 }
 
 function calculateUppercaseRatio(text) {

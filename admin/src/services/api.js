@@ -10,14 +10,17 @@ export function setApiBaseUrl(value) {
 }
 
 export function getStoredToken() {
-  return localStorage.getItem(TOKEN_KEY) || "";
+  localStorage.removeItem(TOKEN_KEY);
+  return sessionStorage.getItem(TOKEN_KEY) || "";
 }
 
 export function setStoredToken(token) {
-  localStorage.setItem(TOKEN_KEY, token);
+  localStorage.removeItem(TOKEN_KEY);
+  sessionStorage.setItem(TOKEN_KEY, token);
 }
 
 export function removeStoredToken() {
+  sessionStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(TOKEN_KEY);
 }
 

@@ -202,14 +202,14 @@ function renderApiInterface() {
           <h2>Login administrativo</h2>
           <label>
             Email
-            <input id="email" value="admin@mcall.local" autocomplete="username" />
+            <input id="email" autocomplete="off" />
           </label>
           <label>
             Senha
-            <input id="password" value="admin123" type="password" autocomplete="current-password" />
+            <input id="password" type="password" autocomplete="new-password" />
           </label>
           <div class="actions">
-            <button type="button" data-action="login">Entrar e guardar token</button>
+            <button type="button" data-action="login">Entrar nesta sessao</button>
             <button type="button" class="secondary" data-action="me">Testar /api/auth/me</button>
           </div>
         </section>
@@ -299,14 +299,16 @@ function renderApiInterface() {
           auth: false,
           body: { email, password }
         });
-        localStorage.setItem(tokenKey, data.token);
+        localStorage.removeItem(tokenKey);
+        sessionStorage.setItem(tokenKey, data.token);
         show(data, "POST /api/auth/login");
       }
 
       async function request(path, options = {}) {
         const headers = { "content-type": "application/json" };
         if (options.auth !== false) {
-          const token = localStorage.getItem(tokenKey);
+          localStorage.removeItem(tokenKey);
+          const token = sessionStorage.getItem(tokenKey);
           if (token) headers.authorization = "Bearer " + token;
         }
 
