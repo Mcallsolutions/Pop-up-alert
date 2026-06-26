@@ -18,6 +18,7 @@
     ["GABRIELL CARVALHO", "Gabriell Carvalho"],
     ["GUILHERME GOMES", "Guilherme Gomes"],
     ["LUIS", "Luis"]
+    ["ALEK", "Alek"],
   ]);
   const ALLOWED_QUEUE_CODES = new Set(["TERRANET", "PLANET", "MIX", "IDEZ", "BDG", "AIA"]);
   const ALLOWED_QUEUE_LABELS = {
