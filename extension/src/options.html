@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Opcoes - Mcall Ticket Tag Monitor</title>
+    <link rel="stylesheet" href="popup.css" />
+    <style>
+      body {
+        min-width: 0;
+      }
+      .popup {
+        max-width: 620px;
+        margin: 0 auto;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="popup">
+      <header>
+        <div>
+          <p class="eyebrow">Configuracoes</p>
+          <h1>Mcall Ticket Tag Monitor</h1>
+        </div>
+      </header>
+
+      <form id="optionsForm" class="config">
+        <label>
+          URL da API
+          <input id="apiBaseUrl" name="apiBaseUrl" type="url" placeholder="http://localhost:3333" />
+        </label>
+        <label>
+          Token da extensao
+          <input id="extensionToken" name="extensionToken" type="password" autocomplete="off" />
+        </label>
+        <button type="submit">Salvar configuracao</button>
+      </form>
+
+      <p id="feedback" class="feedback" role="status"></p>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

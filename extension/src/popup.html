@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mcall Ticket Tag Monitor</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header>
+        <div>
+          <p class="eyebrow">Mcall</p>
+          <h1>Ticket Tag Monitor</h1>
+        </div>
+        <span id="apiBadge" class="badge badge-muted">API</span>
+      </header>
+
+      <section class="metrics" aria-label="Ultima leitura">
+        <div>
+          <span>Tickets</span>
+          <strong id="totalTickets">0</strong>
+        </div>
+        <div>
+          <span>Sem TAG</span>
+          <strong id="missingTags">0</strong>
+        </div>
+        <div>
+          <span>Com TAG</span>
+          <strong id="withTags">0</strong>
+        </div>
+      </section>
+
+      <dl class="status-list">
+        <div>
+          <dt>Ultima leitura</dt>
+          <dd id="lastReadAt">-</dd>
+        </div>
+        <div>
+          <dt>Ultimo envio</dt>
+          <dd id="lastSentAt">-</dd>
+        </div>
+        <div>
+          <dt>URL</dt>
+          <dd id="currentUrl">-</dd>
+        </div>
+        <div>
+          <dt>Captura</dt>
+          <dd id="captureStatus">-</dd>
+        </div>
+        <div>
+          <dt>Diagnostico</dt>
+          <dd id="parserMessage">-</dd>
+        </div>
+        <div id="errorRow" hidden>
+          <dt>Erro</dt>
+          <dd id="lastError">-</dd>
+        </div>
+      </dl>
+
+      <div class="actions">
+        <button id="forceScan" type="button">Forcar leitura</button>
+        <button id="checkApi" type="button" class="secondary">Testar API</button>
+      </div>
+
+      <form id="configForm" class="config">
+        <label>
+          URL da API
+          <input id="apiBaseUrl" name="apiBaseUrl" type="url" placeholder="http://localhost:3333" />
+        </label>
+        <label>
+          Token da extensao
+          <input id="extensionToken" name="extensionToken" type="password" autocomplete="off" />
+        </label>
+        <button type="submit">Salvar configuracao</button>
+      </form>
+
+      <p id="feedback" class="feedback" role="status"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

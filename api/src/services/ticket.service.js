@@ -1,0 +1,206 @@
+const { getDatabase } = require("../database");
+const { normalizeQueueName } = require("./queue-filter");
+const { isKnownAttendant, normalizeAttendantName } = require("./attendant-filter");
+
+function saveSnapshot(payload) {
+  const snapshot = validateSnapshotPayload(payload);
+  const totals = snapshot.tickets.reduce(
+    (acc, ticket) => {
+      if (ticket.tagStatus === "COM_TAG") {
+        acc.withTag += 1;
+      } else {
+        acc.withoutTag += 1;
+      }
+      return acc;
+    },
+    { withTag: 0, withoutTag: 0 }
+  );
+
+  const database = getDatabase();
+  const insertSnapshot = database.prepare(`
+    INSERT INTO snapshots (
+      source,
+      source_url,
+      collected_at,
+      total_tickets,
+      total_with_tag,
+      total_without_tag
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  const insertTicket = database.prepare(`
+    INSERT INTO tickets (
+      snapshot_id,
+      ticket_key,
+      client_name,
+      queue_name,
+      attendant,
+      company,
+      display_time,
+      tag,
+      tag_status,
+      source_url,
+      collected_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const persist = () => {
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = insertSnapshot.run(
+        snapshot.source,
+        snapshot.url,
+        snapshot.collectedAt,
+        snapshot.tickets.length,
+        totals.withTag,
+        totals.withoutTag
+      );
+
+      for (const ticket of snapshot.tickets) {
+        insertTicket.run(
+          result.lastInsertRowid,
+          ticket.ticketKey,
+          ticket.clientName,
+          ticket.queue,
+          ticket.attendant,
+          ticket.company,
+          ticket.displayTime,
+          ticket.tag,
+          ticket.tagStatus,
+          snapshot.url,
+          snapshot.collectedAt
+        );
+      }
+
+      database.exec("COMMIT");
+      return result.lastInsertRowid;
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  };
+
+  const snapshotId = persist();
+
+  return {
+    id: snapshotId,
+    totalTickets: snapshot.tickets.length,
+    totalWithTag: totals.withTag,
+    totalWithoutTag: totals.withoutTag
+  };
+}
+
+function validateSnapshotPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    throwValidation("Payload invalido");
+  }
+
+  const source = cleanText(payload.source || "mtalk", 40);
+  const url = cleanText(payload.url, 500);
+  const collectedAt = cleanText(payload.collectedAt, 40);
+
+  if (!url || !/^https:\/\/s11\.mtalk\.com\.br\/tickets/i.test(url)) {
+    throwValidation("URL de origem invalida");
+  }
+
+  if (!collectedAt || Number.isNaN(new Date(collectedAt).getTime())) {
+    throwValidation("Data de coleta invalida");
+  }
+
+  if (!Array.isArray(payload.tickets)) {
+    throwValidation("Lista de tickets invalida");
+  }
+
+  if (payload.tickets.length > 200) {
+    throwValidation("Snapshot excede o limite de 200 tickets");
+  }
+
+  return {
+    source,
+    url,
+    collectedAt,
+    tickets: uniqueTickets(payload.tickets.map(validateTicket).filter((ticket) => ticket.queue))
+  };
+}
+
+function validateTicket(ticket) {
+  const tag = cleanText(ticket?.tag, 120) || null;
+  const queue = normalizeQueueName(ticket?.queue);
+
+  const normalizedTicket = {
+    clientName: cleanClientName(ticket?.clientName),
+    queue,
+    attendant: normalizeAttendantName(ticket?.attendant).slice(0, 100),
+    company: cleanText(ticket?.company, 120),
+    displayTime: cleanText(ticket?.displayTime, 20),
+    tag,
+    tagStatus: tag ? "COM_TAG" : "SEM_TAG"
+  };
+
+  return {
+    ...normalizedTicket,
+    ticketKey: buildTicketKey(normalizedTicket)
+  };
+}
+
+function uniqueTickets(tickets) {
+  const seen = new Set();
+  return tickets.filter((ticket) => {
+    if (seen.has(ticket.ticketKey)) {
+      return false;
+    }
+    seen.add(ticket.ticketKey);
+    return true;
+  });
+}
+
+function buildTicketKey(ticket) {
+  return [ticket.clientName, ticket.queue, ticket.attendant, ticket.company, ticket.displayTime]
+    .map((part) => normalizeKeyPart(part))
+    .join("|");
+}
+
+function normalizeKeyPart(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function cleanText(value, maxLength) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function cleanClientName(value) {
+  const text = cleanText(value, 160);
+  if (!text) return "";
+  if (isKnownAttendant(text)) return "";
+  if (/^Suporte\s*-/i.test(text)) return "";
+  if (/^(NETFIBRA|MIX|IDEZ|TERRA|PLANET)\b/i.test(text)) return "";
+  if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|Nao identificado|Cliente nao identificado)$/i.test(text)) {
+    return "";
+  }
+  if (/[.!?]/.test(text) && calculateUppercaseRatio(text) < 0.7) return "";
+  if (/[a-z]{2,}\s+[a-z]{2,}/.test(text) && calculateUppercaseRatio(text) < 0.55) return "";
+  return text;
+}
+
+function calculateUppercaseRatio(text) {
+  const letters = Array.from(String(text || "")).filter((char) => /[A-Za-z]/.test(char));
+  if (!letters.length) return 0;
+  const upper = letters.filter((char) => char === char.toUpperCase() && char !== char.toLowerCase()).length;
+  return upper / letters.length;
+}
+
+function throwValidation(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  error.publicMessage = message;
+  throw error;
+}
+
+module.exports = {
+  saveSnapshot
+};

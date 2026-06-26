@@ -1,0 +1,193 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, Roboto, Arial, sans-serif;
+  background: #f4f7fb;
+  color: #1f2937;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 360px;
+}
+
+.popup {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+h1,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 18px;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.eyebrow {
+  color: #50708a;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.badge {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.badge-ok {
+  background: #ddf7e6;
+  color: #08683d;
+}
+
+.badge-error {
+  background: #ffe4e2;
+  color: #b42318;
+}
+
+.badge-muted {
+  background: #e8eef5;
+  color: #40576c;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.metrics div,
+.status-list,
+.config {
+  background: #fff;
+  border: 1px solid #dce5ee;
+  border-radius: 8px;
+}
+
+.metrics div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+
+.metrics span,
+dt,
+label {
+  color: #506173;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.metrics strong {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.status-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+.status-list div {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.status-list div:last-child {
+  border-bottom: 0;
+}
+
+dd {
+  margin: 0;
+  color: #1f2937;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 7px;
+  background: #155eef;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+button:hover {
+  filter: brightness(0.96);
+}
+
+button.secondary {
+  background: #e7edf4;
+  color: #1f2937;
+}
+
+.config {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+}
+
+input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid #cfd9e4;
+  border-radius: 7px;
+  padding: 8px 10px;
+  color: #111827;
+  font: inherit;
+  font-size: 13px;
+}
+
+.check {
+  grid-template-columns: 18px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.check input {
+  min-height: auto;
+}
+
+.feedback {
+  min-height: 18px;
+  color: #40576c;
+  font-size: 12px;
+}
+
