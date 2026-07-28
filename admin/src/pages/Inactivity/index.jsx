@@ -10,11 +10,12 @@ const emptyFilters = {
   clientName: ""
 };
 
-export default function Reports() {
+export default function Inactivity() {
   const [filters, setFilters] = useState(emptyFilters);
+  const [summary, setSummary] = useState(null);
   const [tickets, setTickets] = useState([]);
   const [attendants, setAttendants] = useState([]);
-  const [queues, setQueues] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -22,16 +23,18 @@ export default function Reports() {
     setLoading(true);
     setError("");
     try {
-      const [missingData, attendantData, queueData] = await Promise.all([
-        api.missingTags(activeFilters),
-        api.byAttendant(activeFilters),
-        api.byQueue(activeFilters)
+      const [summaryData, ticketData, attendantData, companyData] = await Promise.all([
+        api.inactivitySummary(activeFilters),
+        api.inactiveTickets(activeFilters),
+        api.inactivityByAttendant(activeFilters),
+        api.inactivityByCompany(activeFilters)
       ]);
-      setTickets(missingData.items || []);
+      setSummary(summaryData);
+      setTickets(ticketData.items || []);
       setAttendants(attendantData.items || []);
-      setQueues(queueData.items || []);
+      setCompanies(companyData.items || []);
     } catch (requestError) {
-      setError(requestError.message || "Falha ao carregar relatorios");
+      setError(requestError.message || "Falha ao carregar inatividade");
     } finally {
       setLoading(false);
     }
@@ -56,13 +59,14 @@ export default function Reports() {
   }
 
   function exportCsv() {
-    const headers = ["Cliente", "Fila", "Atendente", "Empresa", "Horario", "Coletado em", "URL"];
+    const headers = ["Cliente", "Fila", "Atendente", "Empresa", "Horario", "Minutos sem resposta", "Coletado em", "URL"];
     const rows = tickets.map((ticket) => [
       ticket.clientName,
       ticket.queue,
       ticket.attendant,
       ticket.company,
       ticket.displayTime,
+      ticket.inactivityMinutes,
       ticket.collectedAt,
       ticket.url
     ]);
@@ -71,7 +75,7 @@ export default function Reports() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `tickets-sem-tag-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `tickets-inativos-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -80,8 +84,8 @@ export default function Reports() {
     <section className="page-stack">
       <div className="section-toolbar">
         <div>
-          <h2>Tickets sem TAG</h2>
-          <p>Consulte ocorrencias por dia, atendente, fila, empresa ou cliente.</p>
+          <h2>Dashboard de inatividade</h2>
+          <p>Clientes identificados sem resposta ha mais de {summary?.thresholdMinutes || 15} minutos.</p>
         </div>
         <button className="secondary-button" type="button" onClick={() => load()}>
           <RefreshCw aria-hidden="true" size={17} />
@@ -127,8 +131,16 @@ export default function Reports() {
 
       {error ? <p className="notice error">{error}</p> : null}
 
+      <div className="metric-grid">
+        <Metric label="Clientes inativos" value={summary?.inactiveTickets || 0} tone="warning" />
+        <Metric label="Maior espera" value={formatMinutes(summary?.maxInactivityMinutes)} tone="danger" />
+        <Metric label="Media de espera" value={formatMinutes(summary?.averageInactivityMinutes)} />
+        <Metric label="Limite" value={`${summary?.thresholdMinutes || 15} min`} />
+        <Metric label="Ultima coleta" value={formatDate(summary?.lastCollectedAt)} compact />
+      </div>
+
       <section className="table-panel">
-        <h3>Lista de tickets sem TAG</h3>
+        <h3>Clientes sem resposta</h3>
         <div className="table-scroll">
           <table>
             <thead>
@@ -138,13 +150,14 @@ export default function Reports() {
                 <th>Atendente</th>
                 <th>Empresa</th>
                 <th>Horario</th>
+                <th>Sem resposta</th>
                 <th>Coleta</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="6">Carregando...</td>
+                  <td colSpan="7">Carregando...</td>
                 </tr>
               ) : tickets.length ? (
                 tickets.map((ticket) => (
@@ -154,12 +167,13 @@ export default function Reports() {
                     <td>{ticket.attendant || "-"}</td>
                     <td>{ticket.company || "-"}</td>
                     <td>{ticket.displayTime || "-"}</td>
+                    <td>{formatMinutes(ticket.inactivityMinutes)}</td>
                     <td>{formatDate(ticket.collectedAt)}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="6">Nenhum ticket sem TAG encontrado.</td>
+                  <td colSpan="7">Nenhum cliente inativo encontrado.</td>
                 </tr>
               )}
             </tbody>
@@ -168,10 +182,19 @@ export default function Reports() {
       </section>
 
       <div className="two-column">
-        <MiniReport title="Falhas por atendente" rows={attendants} labelKey="attendant" />
-        <MiniReport title="Falhas por fila" rows={queues} labelKey="queue" />
+        <MiniReport title="Inatividade por atendente" rows={attendants} labelKey="attendant" />
+        <MiniReport title="Inatividade por empresa" rows={companies} labelKey="company" />
       </div>
     </section>
+  );
+}
+
+function Metric({ label, value, tone = "default", compact = false }) {
+  return (
+    <article className={`metric-card ${tone}`}>
+      <span>{label}</span>
+      <strong className={compact ? "compact" : ""}>{value}</strong>
+    </article>
   );
 }
 
@@ -184,19 +207,19 @@ function MiniReport({ title, rows, labelKey }) {
           <thead>
             <tr>
               <th>Nome</th>
-              <th>Total</th>
-              <th>Sem TAG</th>
-              <th>Falha</th>
+              <th>Inativos</th>
+              <th>Maior espera</th>
+              <th>Media</th>
             </tr>
           </thead>
           <tbody>
             {rows.length ? (
               rows.map((row) => (
-                <tr key={row[labelKey]}>
-                  <td>{row[labelKey]}</td>
-                  <td>{row.totalTickets}</td>
-                  <td>{row.totalWithoutTag}</td>
-                  <td>{row.failurePercent}%</td>
+                <tr key={row[labelKey] || "sem-identificacao"}>
+                  <td>{row[labelKey] || "-"}</td>
+                  <td>{row.inactiveTickets}</td>
+                  <td>{formatMinutes(row.maxInactivityMinutes)}</td>
+                  <td>{formatMinutes(row.averageInactivityMinutes)}</td>
                 </tr>
               ))
             ) : (
@@ -213,6 +236,11 @@ function MiniReport({ title, rows, labelKey }) {
 
 function csvCell(value) {
   return `"${String(value || "").replace(/"/g, '""')}"`;
+}
+
+function formatMinutes(value) {
+  const minutes = Number(value || 0);
+  return minutes ? `${minutes} min` : "-";
 }
 
 function formatDate(value) {

@@ -41,6 +41,18 @@ export const api = {
   missingTags(filters = {}) {
     return request(`/api/reports/missing-tags${toQuery(filters)}`);
   },
+  inactivitySummary(filters = {}) {
+    return request(`/api/reports/inactivity/summary${toQuery(filters)}`);
+  },
+  inactiveTickets(filters = {}) {
+    return request(`/api/reports/inactivity/tickets${toQuery(filters)}`);
+  },
+  inactivityByAttendant(filters = {}) {
+    return request(`/api/reports/inactivity/by-attendant${toQuery(filters)}`);
+  },
+  inactivityByCompany(filters = {}) {
+    return request(`/api/reports/inactivity/by-company${toQuery(filters)}`);
+  },
   byAttendant(filters = {}) {
     return request(`/api/reports/by-attendant${toQuery(filters)}`);
   },

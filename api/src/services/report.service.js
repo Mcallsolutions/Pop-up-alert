@@ -2,6 +2,8 @@ const { getDatabase } = require("../database");
 const { getAllowedQueues } = require("./queue-filter");
 const { getKnownAttendants, isKnownAttendant, normalizeAttendantName } = require("./attendant-filter");
 
+const INACTIVITY_THRESHOLD_MINUTES = 15;
+
 const SANITIZED_CLIENT_KEY_SQL = `
   CASE
     WHEN client_name IS NULL OR trim(client_name) = '' THEN ''
@@ -11,6 +13,8 @@ const SANITIZED_CLIENT_KEY_SQL = `
       'GABRIELL CARVALHO',
       'GUILHERME GOMES',
       'LUIS',
+      'ALEK',
+      'ALEKSANDRO',
       'ALL',
       'ABERTO',
       'FECHADO',
@@ -57,6 +61,14 @@ const TICKET_KEY_SQL = `
   END
 `;
 
+const REPORT_DEDUPE_KEY_SQL = `
+  CASE
+    WHEN (${SANITIZED_CLIENT_KEY_SQL}) <> ''
+    THEN 'client|' || ${SANITIZED_CLIENT_KEY_SQL}
+    ELSE ${TICKET_KEY_SQL}
+  END
+`;
+
 function getSummary() {
   const database = getDatabase();
   const { where, params } = buildTicketFilters();
@@ -65,7 +77,7 @@ function getSummary() {
     .prepare(
       `
       WITH filtered AS (
-        SELECT *, ${TICKET_KEY_SQL} AS dedupeKey
+        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
         FROM tickets
         ${where}
       ),
@@ -81,6 +93,7 @@ function getSummary() {
         COUNT(*) AS totalTicketsProcessed,
         SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS totalWithTag,
         SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS totalWithoutTag,
+        SUM(CASE WHEN COALESCE(inactivity_minutes, 0) > ${INACTIVITY_THRESHOLD_MINUTES} THEN 1 ELSE 0 END) AS totalInactive,
         MAX(collected_at) AS lastCollectedAt
       FROM ranked
       WHERE rowNumber = 1
@@ -97,6 +110,7 @@ function getSummary() {
     totalTicketsProcessed,
     totalWithTag,
     totalWithoutTag: Number(row.totalWithoutTag || 0),
+    totalInactive: Number(row.totalInactive || 0),
     compliancePercent,
     lastCollectedAt: row.lastCollectedAt || null
   };
@@ -109,7 +123,7 @@ function getMissingTags(filters = {}) {
     .prepare(
       `
       WITH filtered AS (
-        SELECT *, ${TICKET_KEY_SQL} AS dedupeKey
+        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
         FROM tickets
         ${where}
       ),
@@ -145,6 +159,171 @@ function getMissingTags(filters = {}) {
   return { items: rows.map(sanitizeTicketRow) };
 }
 
+function getInactivitySummary(filters = {}) {
+  const { where, params } = buildTicketFilters(filters);
+  const row = getDatabase()
+    .prepare(
+      `
+      WITH filtered AS (
+        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
+        FROM tickets
+        ${where}
+      ),
+      ranked AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY dedupeKey
+            ORDER BY datetime(collected_at) DESC, id DESC
+          ) AS rowNumber
+        FROM filtered
+      )
+      SELECT
+        COUNT(*) AS inactiveTickets,
+        MAX(COALESCE(inactivity_minutes, 0)) AS maxInactivityMinutes,
+        AVG(COALESCE(inactivity_minutes, 0)) AS averageInactivityMinutes,
+        MAX(collected_at) AS lastCollectedAt
+      FROM ranked
+      WHERE rowNumber = 1
+        AND COALESCE(inactivity_minutes, 0) > ?
+        AND (${SANITIZED_CLIENT_KEY_SQL}) <> ''
+    `
+    )
+    .get(...params, INACTIVITY_THRESHOLD_MINUTES);
+
+  return {
+    thresholdMinutes: INACTIVITY_THRESHOLD_MINUTES,
+    inactiveTickets: Number(row.inactiveTickets || 0),
+    maxInactivityMinutes: Number(row.maxInactivityMinutes || 0),
+    averageInactivityMinutes: row.averageInactivityMinutes ? Number(Number(row.averageInactivityMinutes).toFixed(1)) : 0,
+    lastCollectedAt: row.lastCollectedAt || null
+  };
+}
+
+function getInactiveTickets(filters = {}) {
+  const { where, params } = buildTicketFilters(filters);
+  const limit = Math.min(Number(filters.limit || 500), 1000);
+  const rows = getDatabase()
+    .prepare(
+      `
+      WITH filtered AS (
+        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
+        FROM tickets
+        ${where}
+      ),
+      ranked AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY dedupeKey
+            ORDER BY datetime(collected_at) DESC, id DESC
+          ) AS rowNumber
+        FROM filtered
+      )
+      SELECT
+        id,
+        snapshot_id AS snapshotId,
+        client_name AS clientName,
+        queue_name AS queue,
+        attendant,
+        company,
+        display_time AS displayTime,
+        inactivity_minutes AS inactivityMinutes,
+        tag,
+        tag_status AS tagStatus,
+        source_url AS url,
+        collected_at AS collectedAt
+      FROM ranked
+      WHERE rowNumber = 1
+        AND COALESCE(inactivity_minutes, 0) > ?
+        AND (${SANITIZED_CLIENT_KEY_SQL}) <> ''
+      ORDER BY COALESCE(inactivity_minutes, 0) DESC, datetime(collected_at) DESC, id DESC
+      LIMIT ?
+    `
+    )
+    .all(...params, INACTIVITY_THRESHOLD_MINUTES, limit);
+
+  return { items: rows.map(sanitizeTicketRow) };
+}
+
+function getInactivityByAttendant(filters = {}) {
+  const { where, params } = buildTicketFilters(filters);
+  const caseSql = buildAttendantCaseSql();
+  const rows = getDatabase()
+    .prepare(
+      `
+      WITH filtered AS (
+        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
+        FROM tickets
+        ${where}
+      ),
+      ranked AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY dedupeKey
+            ORDER BY datetime(collected_at) DESC, id DESC
+          ) AS rowNumber
+        FROM filtered
+      ),
+      normalized AS (
+        SELECT
+          *,
+          ${caseSql} AS normalizedAttendant
+        FROM ranked
+        WHERE rowNumber = 1
+      )
+      SELECT
+        normalizedAttendant AS attendant,
+        COUNT(*) AS inactiveTickets,
+        MAX(COALESCE(inactivity_minutes, 0)) AS maxInactivityMinutes,
+        AVG(COALESCE(inactivity_minutes, 0)) AS averageInactivityMinutes
+      FROM normalized
+      WHERE normalizedAttendant <> ''
+        AND COALESCE(inactivity_minutes, 0) > ?
+        AND (${SANITIZED_CLIENT_KEY_SQL}) <> ''
+      GROUP BY normalizedAttendant
+      ORDER BY inactiveTickets DESC, maxInactivityMinutes DESC
+    `
+    )
+    .all(...params, INACTIVITY_THRESHOLD_MINUTES);
+
+  return { items: rows.map(withInactivityStats) };
+}
+
+function getInactivityByCompany(filters = {}) {
+  const { where, params } = buildTicketFilters(filters);
+  const rows = getDatabase()
+    .prepare(
+      `
+      WITH filtered AS (
+        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
+        FROM tickets
+        ${where}
+      ),
+      ranked AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY dedupeKey
+            ORDER BY datetime(collected_at) DESC, id DESC
+          ) AS rowNumber
+        FROM filtered
+      )
+      SELECT
+        COALESCE(NULLIF(company, ''), 'Nao identificada') AS company,
+        COUNT(*) AS inactiveTickets,
+        MAX(COALESCE(inactivity_minutes, 0)) AS maxInactivityMinutes,
+        AVG(COALESCE(inactivity_minutes, 0)) AS averageInactivityMinutes
+      FROM ranked
+      WHERE rowNumber = 1
+        AND COALESCE(inactivity_minutes, 0) > ?
+        AND (${SANITIZED_CLIENT_KEY_SQL}) <> ''
+      GROUP BY COALESCE(NULLIF(company, ''), 'Nao identificada')
+      ORDER BY inactiveTickets DESC, maxInactivityMinutes DESC
+    `
+    )
+    .all(...params, INACTIVITY_THRESHOLD_MINUTES);
+
+  return { items: rows.map(withInactivityStats) };
+}
+
 function getReportByAttendant(filters = {}) {
   const { where, params } = buildTicketFilters(filters);
   const caseSql = buildAttendantCaseSql();
@@ -152,7 +331,7 @@ function getReportByAttendant(filters = {}) {
     .prepare(
       `
       WITH filtered AS (
-        SELECT *, ${TICKET_KEY_SQL} AS dedupeKey
+        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
         FROM tickets
         ${where}
       ),
@@ -193,7 +372,7 @@ function getReportByQueue(filters = {}) {
     .prepare(
       `
       WITH filtered AS (
-        SELECT *, ${TICKET_KEY_SQL} AS dedupeKey
+        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
         FROM tickets
         ${where}
       ),
@@ -233,19 +412,27 @@ function buildTicketFilters(filters = {}, initialWhere = "") {
     conditions.push(initialWhere.replace(/^WHERE\s+/i, ""));
   }
 
-  if (filters.startDate) {
+  const day = normalizeDateOnly(filters.day);
+  if (day) {
+    conditions.push("substr(collected_at, 1, 10) = ?");
+    params.push(day);
+  }
+
+  const startDate = normalizeDateTimeFilter(filters.startDate, "start");
+  if (!day && startDate) {
     conditions.push("datetime(collected_at) >= datetime(?)");
-    params.push(filters.startDate);
+    params.push(startDate);
   }
 
-  if (filters.endDate) {
+  const endDate = normalizeDateTimeFilter(filters.endDate, "end");
+  if (!day && endDate) {
     conditions.push("datetime(collected_at) <= datetime(?)");
-    params.push(filters.endDate);
+    params.push(endDate);
   }
 
-  addLikeFilter(conditions, params, "attendant", filters.attendant);
+  addAttendantFilter(conditions, params, filters.attendant);
   addLikeFilter(conditions, params, "queue_name", filters.queue);
-  addLikeFilter(conditions, params, "company", filters.company);
+  addNormalizedLikeFilter(conditions, params, "company", filters.company);
   addLikeFilter(conditions, params, "client_name", filters.clientName);
 
   return {
@@ -263,11 +450,68 @@ function addLikeFilter(conditions, params, column, value) {
   params.push(`%${cleanValue}%`);
 }
 
+function addAttendantFilter(conditions, params, value) {
+  const cleanValue = String(value || "").trim();
+  if (!cleanValue) {
+    return;
+  }
+
+  const normalized = normalizeAttendantName(cleanValue) || cleanValue;
+  conditions.push(`(attendant LIKE ? OR ${buildAttendantCaseSql()} LIKE ?)`);
+  params.push(`%${cleanValue}%`, `%${normalized}%`);
+}
+
+function addNormalizedLikeFilter(conditions, params, column, value) {
+  const cleanValue = String(value || "").trim();
+  if (!cleanValue) {
+    return;
+  }
+
+  const normalized = normalizeComparableText(cleanValue);
+  conditions.push(`(${column} LIKE ? OR ${normalizeComparableSql(column)} LIKE ?)`);
+  params.push(`%${cleanValue}%`, `%${normalized}%`);
+}
+
+function normalizeDateOnly(value) {
+  const match = String(value || "").trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] || "";
+}
+
+function normalizeDateTimeFilter(value, boundary) {
+  const cleanValue = String(value || "").trim();
+  if (!cleanValue) {
+    return "";
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(cleanValue)) {
+    return `${cleanValue}T${boundary === "end" ? "23:59:59" : "00:00:00"}`;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(cleanValue)) {
+    return `${cleanValue}:00`;
+  }
+
+  return cleanValue;
+}
+
+function normalizeComparableSql(column) {
+  return `UPPER(REPLACE(REPLACE(REPLACE(${column}, ' ', ''), '-', ''), '_', ''))`;
+}
+
+function normalizeComparableText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\s_-]+/g, "")
+    .toUpperCase();
+}
+
 function sanitizeTicketRow(row) {
   return {
     ...row,
     clientName: sanitizeClientName(row.clientName),
-    attendant: sanitizeAttendantName(row.attendant)
+    attendant: sanitizeAttendantName(row.attendant),
+    inactivityMinutes: row.inactivityMinutes === null || row.inactivityMinutes === undefined ? null : Number(row.inactivityMinutes || 0)
   };
 }
 
@@ -336,9 +580,22 @@ function withFailurePercent(row) {
   };
 }
 
+function withInactivityStats(row) {
+  return {
+    ...row,
+    inactiveTickets: Number(row.inactiveTickets || 0),
+    maxInactivityMinutes: Number(row.maxInactivityMinutes || 0),
+    averageInactivityMinutes: row.averageInactivityMinutes ? Number(Number(row.averageInactivityMinutes).toFixed(1)) : 0
+  };
+}
+
 module.exports = {
   getSummary,
   getMissingTags,
+  getInactivitySummary,
+  getInactiveTickets,
+  getInactivityByAttendant,
+  getInactivityByCompany,
   getReportByAttendant,
   getReportByQueue
 };

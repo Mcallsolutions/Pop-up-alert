@@ -1,24 +1,29 @@
 (() => {
   const SCAN_INTERVAL_MS = 60 * 1000;
   const MUTATION_DEBOUNCE_MS = 1200;
+  const ONE_MINUTE_MS = 60 * 1000;
+  const INACTIVITY_THRESHOLD_MINUTES = 15;
+  const ALERT_SNOOZE_MS = 5 * ONE_MINUTE_MS;
   const ALERT_ROOT_ID = "mcall-ticket-tag-alert-root";
-  const PARSER_VERSION = "1.2.0";
+  const PARSER_VERSION = "1.3.0";
 
   let scanTimer = null;
   let mutationTimer = null;
   let observer = null;
-  let currentAlertTickets = [];
+  let currentMissingTagAlertTickets = [];
+  let currentInactivityAlertTickets = [];
+  let alertSnoozedUntil = 0;
   let lastCollectDiagnostics = emptyCollectDiagnostics();
 
   const COMPANY_PREFIXES = ["NETFIBRA", "MIX", "IDEZ", "TERRA", "PLANET"];
-  const ALWAYS_COMPANY_PREFIXES = ["NETFIBRA", "IDEZ", "TERRA", "PLANET"];
   const KNOWN_ATTENDANTS = new Map([
     ["STEPHANIE", "Stephanie"],
     ["GABRIEL OLIVEIRA", "Gabriel Oliveira"],
     ["GABRIELL CARVALHO", "Gabriell Carvalho"],
     ["GUILHERME GOMES", "Guilherme Gomes"],
-    ["LUIS", "Luis"]
-    ["ALEK", "Alek"],
+    ["LUIS OTAVIO", "Luis otavio"],
+    ["ALEK", "Aleksandro"],
+    ["ALEKSANDRO", "Aleksandro"]
   ]);
   const ALLOWED_QUEUE_CODES = new Set(["TERRANET", "PLANET", "MIX", "IDEZ", "BDG", "AIA"]);
   const ALLOWED_QUEUE_LABELS = {
@@ -29,7 +34,10 @@
     BDG: "BDG",
     AIA: "AIA"
   };
-  const TAG_PATTERNS = [/^[A-Z]{2,5}\s*-\s*[A-Z0-9][A-Z0-9\s./&]+$/u, /^[A-Z]{2,5}-[A-Z0-9][A-Z0-9\s./&]+$/u];
+  const TAG_PATTERNS = [
+    /^[A-Z0-9]{2,12}\s*[-–—]\s*[A-Z0-9][A-Z0-9\s./&()+_]{1,}$/u,
+    /^[A-Z0-9]{2,12}[-–—][A-Z0-9][A-Z0-9\s./&()+_]{1,}$/u
+  ];
   const QUEUE_PATTERN = /Suporte\s*-\s*([A-Za-z0-9_-]+)/i;
   const TIME_PATTERN = /\b([01]\d|2[0-3]):[0-5]\d\b/;
 
@@ -68,9 +76,10 @@
   async function scanAndSend(reason) {
     const tickets = parseTicketsFromDOM();
     const missingTickets = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG");
+    const inactiveTickets = tickets.filter(isInactiveTicket);
     const diagnostics = buildDiagnostics(reason, tickets);
 
-    renderMissingTagAlerts(missingTickets);
+    renderTicketAlerts(missingTickets, inactiveTickets, { force: reason === "manual" });
 
     const payload = {
       source: "mtalk",
@@ -96,6 +105,7 @@
       ok: response?.ok !== false,
       totalTickets: tickets.length,
       missingTags: missingTickets.length,
+      inactiveTickets: inactiveTickets.length,
       sent: response?.ok === true,
       diagnostics,
       error: response?.error || ""
@@ -244,7 +254,8 @@
     const rawText = getVisibleText(ticketElement);
     const lines = extractLines(rawText);
     const tag = detectClientTag(ticketElement);
-    const displayTime = findFirst(lines, (line) => line.match(TIME_PATTERN)?.[0]) || "";
+    const displayTime = findDisplayTime(ticketElement, lines);
+    const inactivityMinutes = calculateInactivityMinutes(displayTime);
     const queue = findFirst(lines, (line) => normalizeQueueName(line)) || "";
     const company = findCompany(lines, tag);
     const clientName = findClientName(lines, { tag, queue, company, displayTime });
@@ -259,6 +270,7 @@
       attendant,
       company,
       displayTime,
+      inactivityMinutes,
       tag,
       tagStatus,
       debug: {
@@ -269,7 +281,7 @@
   }
 
   function detectClientTag(ticketElement) {
-    const elements = Array.from(ticketElement.querySelectorAll("span, div, p, small, strong, label"));
+    const elements = Array.from(ticketElement.querySelectorAll("span, div, p, small, strong, label, button, [role='button']"));
     const scored = elements
       .filter(isVisibleElement)
       .map((element) => {
@@ -291,36 +303,38 @@
       return -100;
     }
 
-    if (looksLikeAnyQueue(text) || TIME_PATTERN.test(text)) {
+    if (looksLikeAnyQueue(text) || TIME_PATTERN.test(text) || isKnownAttendant(text)) {
       return -100;
     }
 
-    if (/^(Atendente|Responsavel|Usuario|Cliente|Aberto|Fechado|Pendente)$/i.test(text)) {
+    if (isPlaceholderLine(text) || /^(Atendente|Responsavel|Usuario|Cliente|Aberto|Fechado|Pendente)$/i.test(text)) {
       return -100;
     }
 
-    const companyPrefix = getCompanyPrefix(text);
-    if (ALWAYS_COMPANY_PREFIXES.includes(companyPrefix)) {
-      return -100;
-    }
-
-    const matchesTagPattern = TAG_PATTERNS.some((pattern) => pattern.test(text));
+    const matchesTagPattern = matchesClientTagPattern(text);
     const uppercaseRatio = calculateUppercaseRatio(text);
     const visualScore = scoreVisualTagStyle(element);
+    const hasTagHint = hasTagElementHint(element);
+    const tagPrefix = getTagPrefix(text);
 
-    if (companyPrefix === "MIX" && !matchesTagPattern) {
+    if (["CLIENTE", "ATENDENTE", "RESPONSAVEL", "USUARIO", "FILA", "TAG", "TAGS"].includes(tagPrefix)) {
       return -100;
     }
 
-    if (!matchesTagPattern && (!text.includes("-") || uppercaseRatio < 0.75 || visualScore < 3)) {
+    if (looksLikeCompanyOnly(text) && !(matchesTagPattern && (visualScore >= 2 || hasTagHint))) {
+      return -100;
+    }
+
+    if (!matchesTagPattern && !(hasTagHint && visualScore >= 2 && countWords(text) <= 5)) {
       return -100;
     }
 
     let score = 0;
-    if (matchesTagPattern) score += 3;
+    if (matchesTagPattern) score += 4;
     if (uppercaseRatio >= 0.75) score += 2;
     if (visualScore >= 3) score += 3;
-    if (text.includes("-")) score += 1;
+    if (hasTagHint) score += 2;
+    if (/[-–—]/u.test(text)) score += 1;
     if (element.tagName.toLowerCase() === "span") score += 1;
 
     const rect = element.getBoundingClientRect();
@@ -353,21 +367,75 @@
     return score;
   }
 
+  function matchesClientTagPattern(text) {
+    const normalized = normalizeTagText(text);
+    return TAG_PATTERNS.some((pattern) => pattern.test(normalized));
+  }
+
+  function getTagPrefix(text) {
+    return normalizeTagText(text).split(/[-–—]/u)[0]?.trim() || "";
+  }
+
+  function normalizeTagText(value) {
+    return normalizeText(value)
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase();
+  }
+
+  function hasTagElementHint(element) {
+    const hint = [
+      element.getAttribute("aria-label"),
+      element.getAttribute("data-testid"),
+      element.getAttribute("title"),
+      element.getAttribute("class"),
+      element.closest("[aria-label*='tag' i], [data-testid*='tag' i], [class*='tag' i], [class*='chip' i]")?.getAttribute("class")
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return /\b(tag|tags|chip)\b/i.test(hint);
+  }
+
+  function looksLikeCompanyOnly(text) {
+    const normalized = normalizeTagText(text);
+    const prefix = COMPANY_PREFIXES.find(
+      (companyPrefix) =>
+        normalized === companyPrefix || normalized.startsWith(`${companyPrefix} `) || normalized.startsWith(`${companyPrefix}-`)
+    );
+    if (!prefix) {
+      return false;
+    }
+
+    const suffix = normalized.slice(prefix.length).replace(/^[-\s_]+/, "");
+    return !suffix || ALLOWED_QUEUE_CODES.has(normalizeQueueCode(suffix));
+  }
+
   function showMissingTagAlert(ticket) {
-    if (!ticket) {
+    if (!isAlertableTicket(ticket)) {
       return;
     }
 
-    renderMissingTagAlerts([ticket]);
+    renderTicketAlerts([ticket], currentInactivityAlertTickets, { force: true });
   }
 
-  function renderMissingTagAlerts(tickets) {
+  function renderTicketAlerts(missingTagTickets, inactiveTickets, options = {}) {
     const now = Date.now();
-    currentAlertTickets = getUniqueAlertTickets(tickets)
+
+    if (options.force) {
+      alertSnoozedUntil = 0;
+    } else if (alertSnoozedUntil > now) {
+      document.getElementById(ALERT_ROOT_ID)?.remove();
+      return;
+    }
+
+    currentMissingTagAlertTickets = getUniqueAlertTickets(missingTagTickets.filter(isAlertableTicket))
+      .map((ticket) => ({ ...ticket, alertedAt: now }))
+      .slice(0, 6);
+    currentInactivityAlertTickets = getUniqueAlertTickets(inactiveTickets.filter(isAlertableTicket))
       .map((ticket) => ({ ...ticket, alertedAt: now }))
       .slice(0, 6);
 
-    if (!currentAlertTickets.length) {
+    if (!currentMissingTagAlertTickets.length && !currentInactivityAlertTickets.length) {
       document.getElementById(ALERT_ROOT_ID)?.remove();
       return;
     }
@@ -387,14 +455,33 @@
     });
   }
 
+  function isAlertableTicket(ticket) {
+    return hasIdentifiedClient(ticket?.clientName);
+  }
+
+  function hasIdentifiedClient(value) {
+    const text = normalizeText(value);
+    if (!text) return false;
+    if (isKnownAttendant(text)) return false;
+    if (looksLikeAnyQueue(text)) return false;
+    if (getCompanyPrefix(text)) return false;
+    if (matchesClientTagPattern(text)) return false;
+    if (TIME_PATTERN.test(text)) return false;
+    if (isPlaceholderLine(text)) return false;
+    return /[A-Za-z]{3,}/.test(text);
+  }
+
   function createAlertTicketKey(ticket) {
+    if (!isAlertableTicket(ticket)) {
+      return "";
+    }
+
     const clientName = normalizeText(ticket?.clientName).toUpperCase();
     if (clientName) {
       return `CLIENT|${clientName}`;
     }
 
-    const ticketKey = normalizeText(ticket?.ticketKey).toUpperCase();
-    return ticketKey ? `TICKET|${ticketKey}` : "";
+    return "";
   }
 
   function renderAlert() {
@@ -405,28 +492,56 @@
       document.body.appendChild(root);
     }
 
-    const items = currentAlertTickets
-      .map((ticket) => {
-        const title = escapeHtml(ticket.clientName || "Cliente nao identificado");
-        const meta = [ticket.queue, ticket.attendant, ticket.company].filter(Boolean).map(escapeHtml).join(" - ");
-        return `<li><strong>${title}</strong>${meta ? `<span>${meta}</span>` : ""}</li>`;
+    const sections = [
+      buildAlertSection("missing-tag", "Registre a TAG do cliente", currentMissingTagAlertTickets, (ticket) =>
+        [ticket.queue, ticket.attendant, ticket.company].filter(Boolean).join(" - ")
+      ),
+      buildAlertSection("inactivity", "Alerta de inatividade", currentInactivityAlertTickets, (ticket) => {
+        const inactiveFor = Number(ticket.inactivityMinutes || 0);
+        const inactivityText = inactiveFor > 0 ? `${inactiveFor} min sem atividade` : "Mais de 15 min sem atividade";
+        return [inactivityText, ticket.displayTime ? `Horario ${ticket.displayTime}` : "", ticket.queue, ticket.attendant]
+          .filter(Boolean)
+          .join(" - ");
       })
-      .join("");
+    ].join("");
 
     root.innerHTML = `
-      <section class="mcall-alert" role="dialog" aria-live="polite" aria-label="Ticket sem TAG">
+      <section class="mcall-alert" role="dialog" aria-live="polite" aria-label="Alertas de ticket">
         <div class="mcall-alert__header">
-          <strong>Registre a TAG do cliente</strong>
+          <strong>Alertas de tickets</strong>
           <button type="button" class="mcall-alert__close" aria-label="Fechar alerta">&times;</button>
         </div>
-        <ul>${items}</ul>
+        <div class="mcall-alert__body">${sections}</div>
       </section>
     `;
 
     root.querySelector(".mcall-alert__close")?.addEventListener("click", () => {
-      currentAlertTickets = [];
+      alertSnoozedUntil = Date.now() + ALERT_SNOOZE_MS;
+      currentMissingTagAlertTickets = [];
+      currentInactivityAlertTickets = [];
       root.remove();
     });
+  }
+
+  function buildAlertSection(type, title, tickets, getMeta) {
+    if (!tickets.length) {
+      return "";
+    }
+
+    const items = tickets
+      .map((ticket) => {
+        const itemTitle = escapeHtml(ticket.clientName);
+        const meta = escapeHtml(getMeta(ticket));
+        return `<li><strong>${itemTitle}</strong>${meta ? `<span>${meta}</span>` : ""}</li>`;
+      })
+      .join("");
+
+    return `
+      <div class="mcall-alert__section" data-alert-type="${type}">
+        <strong class="mcall-alert__section-title">${escapeHtml(title)}</strong>
+        <ul>${items}</ul>
+      </div>
+    `;
   }
 
   function injectAlertStyles() {
@@ -477,9 +592,24 @@
         font-size: 20px;
         line-height: 1;
       }
+      #${ALERT_ROOT_ID} .mcall-alert__body {
+        display: grid;
+        gap: 12px;
+        padding: 0 14px 14px;
+      }
+      #${ALERT_ROOT_ID} .mcall-alert__section {
+        display: grid;
+        gap: 8px;
+      }
+      #${ALERT_ROOT_ID} .mcall-alert__section-title {
+        font-size: 12px;
+        line-height: 1.3;
+        color: #374151;
+        text-transform: uppercase;
+      }
       #${ALERT_ROOT_ID} ul {
         margin: 0;
-        padding: 0 14px 14px;
+        padding: 0;
         list-style: none;
         display: grid;
         gap: 8px;
@@ -500,8 +630,46 @@
         font-size: 12px;
         line-height: 1.3;
       }
+      #${ALERT_ROOT_ID} [data-alert-type="inactivity"] li {
+        background: #fff8e1;
+      }
     `;
     document.documentElement.appendChild(style);
+  }
+
+  function findDisplayTime(ticketElement, lines) {
+    const elements = Array.from(
+      ticketElement.querySelectorAll(
+        "span.MuiTypography-colorTextSecondary, span.MuiTypography-body2, span[class*='MuiTypography-colorTextSecondary'], span[class*='MuiTypography-body2']"
+      )
+    );
+    const timeFromTypography = findFirst(elements.filter(isVisibleElement), (element) => getVisibleText(element).match(TIME_PATTERN)?.[0]);
+    return timeFromTypography || findFirst(lines, (line) => line.match(TIME_PATTERN)?.[0]) || "";
+  }
+
+  function isInactiveTicket(ticket) {
+    return Number(ticket?.inactivityMinutes || 0) > INACTIVITY_THRESHOLD_MINUTES;
+  }
+
+  function calculateInactivityMinutes(displayTime, now = new Date()) {
+    const match = normalizeText(displayTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+    if (!match) {
+      return null;
+    }
+
+    const displayedAt = new Date(now);
+    displayedAt.setHours(Number(match[1]), Number(match[2]), 0, 0);
+
+    let diffMs = now.getTime() - displayedAt.getTime();
+    if (diffMs < 0) {
+      const aheadMs = Math.abs(diffMs);
+      if (aheadMs <= 12 * 60 * 60 * 1000) {
+        return 0;
+      }
+      diffMs += 24 * 60 * 60 * 1000;
+    }
+
+    return Math.floor(diffMs / ONE_MINUTE_MS);
   }
 
   function findClientName(lines, ignored) {
@@ -576,14 +744,22 @@
     if (isKnownAttendant(line)) return false;
     if (looksLikeAnyQueue(line)) return false;
     if (getCompanyPrefix(line)) return false;
-    if (TAG_PATTERNS.some((pattern) => pattern.test(line))) return false;
+    if (matchesClientTagPattern(line)) return false;
     if (TIME_PATTERN.test(line)) return false;
+    if (isPlaceholderLine(line)) return false;
     if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|N[aãÃ]o identificado|Cliente n[aãÃ]o identificado)$/i.test(line)) {
       return false;
     }
     if (/[.!?]{1,}/.test(line) && calculateUppercaseRatio(line) < 0.7) return false;
     if (/[a-z]{2,}\s+[a-z]{2,}/.test(line) && calculateUppercaseRatio(line) < 0.55) return false;
     return /[A-Za-z]{3,}/.test(line);
+  }
+
+  function isPlaceholderLine(line) {
+    const normalized = normalizeTagText(line);
+    return /^(ALL|ABERTO|FECHADO|PENDENTE|RESOLVIDO|ATENDENTE|RESPONSAVEL|USUARIO|CLIENTE|FILA|TAG|TAGS|NAO IDENTIFICADO|CLIENTE NAO IDENTIFICADO)$/.test(
+      normalized
+    );
   }
 
   function normalizeAttendantName(value) {

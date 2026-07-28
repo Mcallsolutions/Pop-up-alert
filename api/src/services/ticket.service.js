@@ -36,11 +36,12 @@ function saveSnapshot(payload) {
       attendant,
       company,
       display_time,
+      inactivity_minutes,
       tag,
       tag_status,
       source_url,
       collected_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const persist = () => {
@@ -64,6 +65,7 @@ function saveSnapshot(payload) {
           ticket.attendant,
           ticket.company,
           ticket.displayTime,
+          ticket.inactivityMinutes,
           ticket.tag,
           ticket.tagStatus,
           snapshot.url,
@@ -132,6 +134,7 @@ function validateTicket(ticket) {
     attendant: cleanAttendantName(ticket?.attendant),
     company: cleanText(ticket?.company, 120),
     displayTime: cleanText(ticket?.displayTime, 20),
+    inactivityMinutes: cleanInactivityMinutes(ticket?.inactivityMinutes),
     tag,
     tagStatus: tag ? "COM_TAG" : "SEM_TAG"
   };
@@ -191,6 +194,13 @@ function cleanAttendantName(value) {
   const text = cleanText(value, 100);
   if (!text || !isKnownAttendant(text)) return "";
   return normalizeAttendantName(text).slice(0, 100);
+}
+
+function cleanInactivityMinutes(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes < 0) return null;
+  return Math.min(Math.floor(minutes), 24 * 60);
 }
 
 function calculateUppercaseRatio(text) {

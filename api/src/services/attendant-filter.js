@@ -3,7 +3,9 @@ const ATTENDANT_ALIASES = new Map([
   ["GABRIEL OLIVEIRA", "Gabriel Oliveira"],
   ["GABRIELL CARVALHO", "Gabriell Carvalho"],
   ["GUILHERME GOMES", "Guilherme Gomes"],
-  ["LUIS", "Luis"]
+  ["LUIS OTAVIO", "Luis otavio"],
+  ["ALEK", "Aleksandro"],
+  ["ALEKSANDRO", "Aleksandro"]
 ]);
 const COMPANY_PREFIXES = ["NETFIBRA", "MIX", "IDEZ", "TERRA", "PLANET"];
 
@@ -38,7 +40,7 @@ function isKnownAttendant(value) {
 }
 
 function getKnownAttendants() {
-  return Array.from(ATTENDANT_ALIASES.values());
+  return Array.from(new Set(ATTENDANT_ALIASES.values()));
 }
 
 function normalizeKey(value) {

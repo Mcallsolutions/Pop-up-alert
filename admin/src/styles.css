@@ -1,8 +1,33 @@
 :root {
-  color-scheme: light;
+  color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #eef3f7;
-  color: #172033;
+  --bg: #030912;
+  --bg-2: #060f1e;
+  --bg-3: #0a1628;
+  --bg-4: #0d1e36;
+  --green: #00e5b0;
+  --green-dim: #00c49a;
+  --green-dark: #009e82;
+  --green-glow: rgba(0, 229, 176, 0.12);
+  --green-glow-strong: rgba(0, 229, 176, 0.22);
+  --green-border: rgba(0, 229, 176, 0.2);
+  --green-border-strong: rgba(0, 229, 176, 0.4);
+  --blue-accent: #3b82f6;
+  --blue-glow: rgba(59, 130, 246, 0.18);
+  --white: #ffffff;
+  --text-1: #f0f6ff;
+  --text-2: #8fa8c8;
+  --text-3: #4d6480;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-light: rgba(255, 255, 255, 0.1);
+  --card: rgba(255, 255, 255, 0.025);
+  --card-hover: rgba(255, 255, 255, 0.05);
+  --glass: rgba(10, 22, 40, 0.7);
+  --radius: 8px;
+  --radius-sm: 8px;
+  --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: var(--bg);
+  color: var(--text-1);
 }
 
 * {
@@ -12,6 +37,11 @@
 body {
   margin: 0;
   min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(0, 229, 176, 0.08), transparent 30%),
+    radial-gradient(circle at 86% 12%, rgba(59, 130, 246, 0.1), transparent 28%),
+    linear-gradient(135deg, var(--bg) 0%, var(--bg-2) 46%, var(--bg-3) 100%);
 }
 
 button,
@@ -28,7 +58,9 @@ button {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: #eef3f7;
+  background:
+    radial-gradient(circle at 50% 8%, var(--green-glow-strong), transparent 34%),
+    linear-gradient(155deg, var(--bg) 0%, var(--bg-2) 50%, var(--bg-4) 100%);
 }
 
 .login-panel {
@@ -36,10 +68,11 @@ button {
   display: grid;
   gap: 18px;
   padding: 28px;
-  background: #fff;
-  border: 1px solid #d9e2ec;
-  border-radius: 8px;
-  box-shadow: 0 20px 45px rgba(23, 32, 51, 0.12);
+  background: linear-gradient(180deg, rgba(13, 30, 54, 0.88), rgba(6, 15, 30, 0.94));
+  border: 1px solid var(--green-border);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255, 255, 255, 0.025);
+  backdrop-filter: blur(16px);
 }
 
 .login-title,
@@ -54,6 +87,7 @@ button {
 .section-toolbar h2,
 .table-panel h3 {
   margin: 0;
+  color: var(--text-1);
 }
 
 .login-title p,
@@ -62,7 +96,7 @@ button {
 .brand span,
 .metric-card span {
   margin: 0;
-  color: #5a6c7f;
+  color: var(--text-2);
   font-size: 13px;
 }
 
@@ -71,17 +105,18 @@ button {
   height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  background: #155eef;
-  color: #fff;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--green) 0%, var(--blue-accent) 100%);
+  color: var(--bg);
   font-size: 22px;
   font-weight: 850;
+  box-shadow: 0 0 28px var(--green-glow-strong);
 }
 
 label {
   display: grid;
   gap: 7px;
-  color: #405267;
+  color: var(--text-2);
   font-size: 13px;
   font-weight: 700;
 }
@@ -89,16 +124,18 @@ label {
 input {
   min-height: 40px;
   width: 100%;
-  border: 1px solid #cbd7e3;
-  border-radius: 7px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
   padding: 9px 11px;
-  color: #172033;
-  background: #fff;
+  color: var(--text-1);
+  background: rgba(3, 9, 18, 0.66);
+  transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
 }
 
 input:focus {
-  border-color: #155eef;
-  outline: 3px solid rgba(21, 94, 239, 0.14);
+  border-color: var(--green-border-strong);
+  outline: 3px solid var(--green-glow);
+  background: rgba(10, 22, 40, 0.92);
 }
 
 .primary-button,
@@ -110,13 +147,21 @@ input:focus {
   justify-content: center;
   gap: 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   font-weight: 800;
+  transition: transform var(--transition), background var(--transition), color var(--transition), box-shadow var(--transition);
 }
 
 .primary-button {
-  background: #155eef;
-  color: #fff;
+  background: linear-gradient(135deg, var(--green) 0%, var(--green-dim) 55%, var(--blue-accent) 100%);
+  color: var(--bg);
+  box-shadow: 0 14px 36px var(--green-glow);
+}
+
+.primary-button:hover:not(:disabled),
+.secondary-button:hover:not(:disabled),
+.nav-button:hover {
+  transform: translateY(-1px);
 }
 
 .primary-button:disabled,
@@ -126,33 +171,45 @@ input:focus {
 }
 
 .secondary-button {
-  background: #e4ebf2;
-  color: #172033;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--text-1);
   padding: 0 14px;
+  border: 1px solid rgba(59, 130, 246, 0.22);
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: rgba(0, 229, 176, 0.1);
+  box-shadow: 0 0 22px var(--green-glow);
 }
 
 .form-error,
 .notice.error {
   margin: 0;
-  color: #b42318;
+  color: #7dd3fc;
 }
 
 .notice {
   margin: 0;
   padding: 12px 14px;
-  border-radius: 8px;
-  background: #fff;
-  border: 1px solid #d9e2ec;
+  border-radius: var(--radius);
+  background: var(--glass);
+  border: 1px solid var(--border-light);
+  color: var(--text-2);
 }
 
 .notice.success {
-  color: #067647;
+  color: var(--green);
+  border-color: var(--green-border);
+  background: var(--green-glow);
 }
 
 .app-shell {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
+  background:
+    radial-gradient(circle at 78% 0%, rgba(59, 130, 246, 0.1), transparent 30%),
+    linear-gradient(140deg, var(--bg) 0%, var(--bg-2) 50%, var(--bg-3) 100%);
 }
 
 .sidebar {
@@ -163,8 +220,9 @@ input:focus {
   grid-template-rows: auto 1fr auto;
   gap: 22px;
   padding: 22px;
-  background: #172033;
-  color: #fff;
+  background: linear-gradient(180deg, rgba(6, 15, 30, 0.96), rgba(3, 9, 18, 0.98));
+  color: var(--text-1);
+  border-right: 1px solid var(--border);
 }
 
 .brand strong {
@@ -173,7 +231,12 @@ input:focus {
 }
 
 .brand span {
-  color: #c6d2df;
+  color: var(--text-2);
+}
+
+.brand svg {
+  color: var(--green);
+  filter: drop-shadow(0 0 16px rgba(0, 229, 176, 0.28));
 }
 
 nav {
@@ -187,17 +250,18 @@ nav {
   width: 100%;
   padding: 0 12px;
   background: transparent;
-  color: #d9e2ec;
+  color: var(--text-2);
 }
 
 .nav-button.active,
 .nav-button:hover {
-  background: #24344a;
-  color: #fff;
+  background: rgba(0, 229, 176, 0.1);
+  color: var(--text-1);
+  box-shadow: inset 3px 0 0 var(--green);
 }
 
 .nav-button.logout {
-  color: #ffd7d3;
+  color: #93c5fd;
 }
 
 .workspace {
@@ -213,8 +277,9 @@ nav {
   justify-content: space-between;
   gap: 16px;
   padding: 18px 28px;
-  background: #fff;
-  border-bottom: 1px solid #d9e2ec;
+  background: rgba(6, 15, 30, 0.74);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(14px);
 }
 
 .topbar h1 {
@@ -222,7 +287,7 @@ nav {
 }
 
 .topbar span {
-  color: #405267;
+  color: var(--green);
   font-size: 14px;
   font-weight: 700;
 }
@@ -255,9 +320,11 @@ nav {
 .table-panel,
 .filters,
 .settings-form {
-  background: #fff;
-  border: 1px solid #d9e2ec;
-  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(13, 30, 54, 0.76), rgba(6, 15, 30, 0.8));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 16px 46px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(12px);
 }
 
 .metric-card {
@@ -266,8 +333,16 @@ nav {
   padding: 16px;
 }
 
+.metric-card:hover,
+.table-panel:hover,
+.filters:hover,
+.settings-form:hover {
+  border-color: var(--green-border);
+  background: linear-gradient(180deg, rgba(13, 30, 54, 0.9), rgba(6, 15, 30, 0.86));
+}
+
 .metric-card strong {
-  color: #172033;
+  color: var(--text-1);
   font-size: 28px;
   line-height: 1;
 }
@@ -278,11 +353,15 @@ nav {
 }
 
 .metric-card.danger strong {
-  color: #b42318;
+  color: #60a5fa;
+}
+
+.metric-card.warning strong {
+  color: #facc15;
 }
 
 .metric-card.success strong {
-  color: #087443;
+  color: var(--green);
 }
 
 .two-column {
@@ -299,7 +378,7 @@ nav {
 .table-panel h3 {
   padding: 16px 18px;
   font-size: 16px;
-  border-bottom: 1px solid #e6edf3;
+  border-bottom: 1px solid var(--border);
 }
 
 .table-scroll {
@@ -315,20 +394,28 @@ table {
 th,
 td {
   padding: 12px 14px;
-  border-bottom: 1px solid #edf2f6;
+  border-bottom: 1px solid var(--border);
   text-align: left;
   font-size: 13px;
   vertical-align: top;
 }
 
 th {
-  color: #526579;
+  color: var(--text-2);
   font-size: 12px;
   text-transform: uppercase;
 }
 
+td {
+  color: var(--text-1);
+}
+
+tbody tr {
+  transition: background var(--transition);
+}
+
 tbody tr:hover {
-  background: #f8fafc;
+  background: var(--card-hover);
 }
 
 .filters {
@@ -393,4 +480,3 @@ tbody tr:hover {
     flex-direction: column;
   }
 }
-
