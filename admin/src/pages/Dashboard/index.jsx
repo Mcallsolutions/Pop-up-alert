@@ -1,22 +1,24 @@
 import React, { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import FilterBar, { emptyFilters } from "../../components/FilterBar";
 import { api } from "../../services/api";
 
 export default function Dashboard() {
+  const [filters, setFilters] = useState(emptyFilters);
   const [summary, setSummary] = useState(null);
   const [attendants, setAttendants] = useState([]);
   const [queues, setQueues] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  async function load() {
+  async function load(activeFilters = filters) {
     setLoading(true);
     setError("");
     try {
       const [summaryData, attendantData, queueData] = await Promise.all([
-        api.summary(),
-        api.byAttendant(),
-        api.byQueue()
+        api.summary(activeFilters),
+        api.byAttendant(activeFilters),
+        api.byQueue(activeFilters)
       ]);
       setSummary(summaryData);
       setAttendants(attendantData.items || []);
@@ -32,6 +34,15 @@ export default function Dashboard() {
     load();
   }, []);
 
+  function updateFilter(key, value) {
+    setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function clearFilters() {
+    setFilters(emptyFilters);
+    load(emptyFilters);
+  }
+
   return (
     <section className="page-stack">
       <div className="section-toolbar">
@@ -39,11 +50,13 @@ export default function Dashboard() {
           <h2>Resumo geral</h2>
           <p>Indicadores consolidados das leituras recebidas pela API.</p>
         </div>
-        <button className="secondary-button" type="button" onClick={load}>
+        <button className="secondary-button" type="button" onClick={() => load()}>
           <RefreshCw aria-hidden="true" size={17} />
           Atualizar
         </button>
       </div>
+
+      <FilterBar filters={filters} onChange={updateFilter} onApply={load} onClear={clearFilters} />
 
       {error ? <p className="notice error">{error}</p> : null}
 

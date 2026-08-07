@@ -47,8 +47,11 @@ export const api = {
   me() {
     return request("/api/auth/me");
   },
-  summary() {
-    return request("/api/reports/summary");
+  summary(filters = {}) {
+    return request(`/api/reports/summary${toQuery(filters)}`);
+  },
+  filterOptions(filters = {}) {
+    return request(`/api/reports/filters${toQuery(filters)}`);
   },
   missingTags(filters = {}) {
     return request(`/api/reports/missing-tags${toQuery(filters)}`);

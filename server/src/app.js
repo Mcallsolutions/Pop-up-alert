@@ -7,7 +7,7 @@ const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const { initializeDatabase } = require("./database");
 const authRoutes = require("./routes/auth.routes");
-const ticketRoutes = require("./routes/tickets.routes");
+const { publicRoutes: ticketPublicRoutes, dataRoutes: ticketDataRoutes } = require("./routes/tickets.routes");
 const reportRoutes = require("./routes/reports.routes");
 const { renderApiInterface, getApiCatalog } = require("./views/api-interface");
 
@@ -139,7 +139,9 @@ app.get(["/", "/api/console"], (_req, res) => {
 });
 
 app.use("/api/auth", requireDatabase, authRoutes);
-app.use("/api/tickets", requireDatabase, ticketRoutes);
+// O ping so confere o token, entao vai antes do requireDatabase.
+app.use("/api/tickets", ticketPublicRoutes);
+app.use("/api/tickets", requireDatabase, ticketDataRoutes);
 app.use("/api/reports", requireDatabase, reportRoutes);
 
 app.use((_req, res) => {

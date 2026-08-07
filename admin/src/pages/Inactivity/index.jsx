@@ -1,14 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { Download, Filter, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
+import FilterBar, { emptyFilters } from "../../components/FilterBar";
 import { api } from "../../services/api";
-
-const emptyFilters = {
-  day: "",
-  attendant: "",
-  queue: "",
-  company: "",
-  clientName: ""
-};
 
 export default function Inactivity() {
   const [filters, setFilters] = useState(emptyFilters);
@@ -46,11 +39,6 @@ export default function Inactivity() {
 
   function updateFilter(key, value) {
     setFilters((current) => ({ ...current, [key]: value }));
-  }
-
-  function handleSubmit(event) {
-    event.preventDefault();
-    load(filters);
   }
 
   function clearFilters() {
@@ -93,41 +81,14 @@ export default function Inactivity() {
         </button>
       </div>
 
-      <form className="filters" onSubmit={handleSubmit}>
-        <label>
-          Dia
-          <input type="date" value={filters.day} onChange={(event) => updateFilter("day", event.target.value)} />
-        </label>
-        <label>
-          Atendente
-          <input value={filters.attendant} onChange={(event) => updateFilter("attendant", event.target.value)} />
-        </label>
-        <label>
-          Fila
-          <input value={filters.queue} onChange={(event) => updateFilter("queue", event.target.value)} />
-        </label>
-        <label>
-          Empresa
-          <input value={filters.company} onChange={(event) => updateFilter("company", event.target.value)} />
-        </label>
-        <label>
-          Cliente
-          <input value={filters.clientName} onChange={(event) => updateFilter("clientName", event.target.value)} />
-        </label>
-        <div className="filter-actions">
-          <button className="primary-button" type="submit">
-            <Filter aria-hidden="true" size={17} />
-            Filtrar
-          </button>
-          <button className="secondary-button" type="button" onClick={clearFilters}>
-            Limpar
-          </button>
-          <button className="secondary-button" type="button" onClick={exportCsv} disabled={!tickets.length}>
-            <Download aria-hidden="true" size={17} />
-            CSV
-          </button>
-        </div>
-      </form>
+      <FilterBar
+        filters={filters}
+        onChange={updateFilter}
+        onApply={load}
+        onClear={clearFilters}
+        onExport={exportCsv}
+        exportDisabled={!tickets.length}
+      />
 
       {error ? <p className="notice error">{error}</p> : null}
 
@@ -162,11 +123,11 @@ export default function Inactivity() {
               ) : tickets.length ? (
                 tickets.map((ticket) => (
                   <tr key={ticket.id}>
-                    <td>{ticket.clientName || "-"}</td>
-                    <td>{ticket.queue || "-"}</td>
-                    <td>{ticket.attendant || "-"}</td>
-                    <td>{ticket.company || "-"}</td>
-                    <td>{ticket.displayTime || "-"}</td>
+                    <td>{ticket.clientName}</td>
+                    <td>{ticket.queue}</td>
+                    <td>{ticket.attendant}</td>
+                    <td>{ticket.company}</td>
+                    <td>{ticket.displayTime}</td>
                     <td>{formatMinutes(ticket.inactivityMinutes)}</td>
                     <td>{formatDate(ticket.collectedAt)}</td>
                   </tr>

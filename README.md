@@ -118,6 +118,41 @@ Se o login retornar `Origem nao permitida pelo CORS: <origem>`, a mensagem mostr
 3. Ajuste `host_permissions` em `extension/manifest.json` se o dominio final for outro.
 4. No popup/opcoes da extensao, configure a URL da API como `https://seu-projeto.vercel.app` e o mesmo `EXTENSION_TOKEN`.
 
+### Diagnostico
+
+Dois endpoints publicos ajudam a investigar um deploy:
+
+- `GET /health` — status da API e do banco
+- `GET /api/debug/status` — quantos snapshots e tickets chegaram, quando foi o ultimo e se a API exige token
+- `GET /api/debug/cors` — o que a API recebe como origem e como decide liberar
+
+### O painel nao atualiza mesmo com a extensao lendo tickets
+
+A leitura dos tickets acontece no DOM e funciona mesmo sem API. Se o painel nao mostra nada,
+o snapshot nao chegou. Abra `GET /api/debug/status`:
+
+- `snapshotsRecebidos: 0` confirma que nenhum POST foi gravado
+- `extensionTokenExigido: true` significa que `EXTENSION_TOKEN` esta preenchido na Vercel
+
+Nesse caso o campo **Token da extensao** no popup precisa ter exatamente o mesmo valor de
+`EXTENSION_TOKEN`. Vazio ou diferente faz todo `POST /api/tickets/snapshot` voltar 401,
+silenciosamente, porque a leitura continua funcionando normalmente.
+
+Use o botao **Testar API** no popup: ele consulta `/health` e tambem faz `POST /api/tickets/ping`,
+que passa pela mesma validacao de token do snapshot. Se o ping passar, o envio real tambem passa.
+
+`/api/tickets/ping` nao toca no banco, entao responde mesmo com o Postgres fora do ar.
+
+### "Rota nao encontrada" no botao Testar API
+
+Significa que a URL configurada na extensao aponta para um endereco que a API nao serve.
+Verifique, nesta ordem:
+
+1. A URL da API no popup deve ser so a origem (`https://seu-projeto.vercel.app`), **sem** `/api` no final.
+2. O deploy na Vercel precisa estar atualizado — `/api/tickets/ping` so existe a partir desta versao.
+   Enquanto o deploy antigo estiver no ar, o popup mostra "API conectada" avisando que o token nao pode ser conferido.
+3. `GET /api` lista todas as rotas que aquele deploy realmente publica.
+
 ### Limitacoes do ambiente serverless
 
 - O rate limit em memoria vale por instancia, nao globalmente. Para limite real e compartilhado, use Vercel KV/Redis ou o WAF da Vercel.
@@ -172,6 +207,7 @@ Endpoints autenticados com JWT:
 
 - `GET /api/auth/me`
 - `GET /api/reports/summary`
+- `GET /api/reports/filters` (valores disponiveis para os filtros do painel)
 - `GET /api/reports/missing-tags`
 - `GET /api/reports/by-attendant`
 - `GET /api/reports/by-queue`
@@ -180,8 +216,19 @@ Endpoints autenticados com JWT:
 - `GET /api/reports/inactivity/by-attendant`
 - `GET /api/reports/inactivity/by-company`
 
-Endpoint da extensao:
+Todos os endpoints de `/api/reports` aceitam os mesmos filtros por query string:
+`day`, `startDate`, `endDate`, `attendant`, `company`, `queue`, `clientName` e `limit`.
+A busca por texto e parcial e ignora maiusculas; `attendant` tambem casa com as variacoes
+do nome gravadas pelo MTalk (`Alek`, `Alek NETFIBRA`, ... todas caem em `Aleksandro`).
 
+As listas de tickets (`missing-tags` e `inactivity/tickets`) so retornam registros com
+cliente, fila, atendente, empresa e horario identificados. Leituras parciais nao viram
+linhas vazias na tabela: elas sao contadas em `incompletosOcultos` na resposta de
+`missing-tags`, e o painel mostra esse numero abaixo dos filtros.
+
+Endpoints da extensao:
+
+- `POST /api/tickets/ping` (testa conectividade e token, nao usa o banco)
 - `POST /api/tickets/snapshot`
 
 Se `EXTENSION_TOKEN` estiver preenchido, a extensao precisa enviar o mesmo valor no header `x-extension-token`.

@@ -47,7 +47,15 @@ async function forceScan() {
 async function checkApi() {
   setFeedback("Testando API...");
   const response = await sendMessage({ type: "CHECK_API_HEALTH" });
-  setFeedback(response?.ok ? "API conectada." : response?.error || "API indisponivel.");
+  if (response?.ok) {
+    setFeedback(
+      response.tokenVerificado
+        ? "API conectada e token aceito."
+        : "API conectada. Versao publicada ainda nao tem /api/tickets/ping, entao o token nao pode ser conferido."
+    );
+  } else {
+    setFeedback(response?.error || "API indisponivel.");
+  }
   await load();
 }
 

@@ -4,7 +4,9 @@ const { getKnownAttendants, isKnownAttendant, normalizeAttendantName } = require
 
 const INACTIVITY_THRESHOLD_MINUTES = 15;
 
-const SANITIZED_CLIENT_KEY_SQL = `
+// Mesma limpeza aplicada na escrita (ticket.service), porem em SQL: descarta
+// nomes que na verdade sao atendente, empresa ou rotulo da tela do MTalk.
+const SANITIZED_CLIENT_NAME_SQL = `
   CASE
     WHEN client_name IS NULL OR trim(client_name) = '' THEN ''
     WHEN UPPER(TRIM(client_name)) IN (
@@ -38,9 +40,11 @@ const SANITIZED_CLIENT_KEY_SQL = `
     WHEN UPPER(TRIM(client_name)) LIKE 'IDEZ%' THEN ''
     WHEN UPPER(TRIM(client_name)) LIKE 'TERRA%' THEN ''
     WHEN UPPER(TRIM(client_name)) LIKE 'PLANET%' THEN ''
-    ELSE lower(trim(client_name))
+    ELSE trim(client_name)
   END
 `;
+
+const SANITIZED_CLIENT_KEY_SQL = `lower(${SANITIZED_CLIENT_NAME_SQL})`;
 
 const TICKET_KEY_SQL = `
   CASE
@@ -69,13 +73,21 @@ const REPORT_DEDUPE_KEY_SQL = `
   END
 `;
 
-async function getSummary() {
-  const database = await getDatabase();
-  const { where, params } = buildTicketFilters();
-  const readings = await database.prepare(`SELECT COUNT(DISTINCT snapshot_id) AS "totalReadings" FROM tickets ${where}`).get(...params);
-  const row = await database
-    .prepare(
-      `
+// Um ticket so entra nos relatorios de lista quando os cinco campos que o
+// identificam foram lidos. Sem isso a tela mostra linhas em que apenas a fila
+// foi reconhecida e todo o resto vira "-".
+const COMPLETE_TICKET_SQL = `(
+  (${SANITIZED_CLIENT_NAME_SQL}) <> ''
+  AND (${buildAttendantCaseSql()}) <> ''
+  AND trim(coalesce(queue_name, '')) <> ''
+  AND trim(coalesce(company, '')) <> ''
+  AND trim(coalesce(display_time, '')) <> ''
+)`;
+
+// Prefixo comum das consultas: aplica os filtros e mantem, de cada ticket
+// repetido entre snapshots, apenas a leitura mais recente.
+function buildRankedTicketsSql(where) {
+  return `
       WITH filtered AS (
         SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
         FROM tickets
@@ -88,7 +100,17 @@ async function getSummary() {
             ORDER BY datetime(collected_at) DESC, id DESC
           ) AS rowNumber
         FROM filtered
-      )
+      )`;
+}
+
+async function getSummary(filters = {}) {
+  const database = await getDatabase();
+  const { where, params } = buildTicketFilters(filters);
+  const readings = await database.prepare(`SELECT COUNT(DISTINCT snapshot_id) AS "totalReadings" FROM tickets ${where}`).get(...params);
+  const row = await database
+    .prepare(
+      `
+      ${buildRankedTicketsSql(where)}
       SELECT
         COUNT(*) AS "totalTicketsProcessed",
         SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS "totalWithTag",
@@ -116,34 +138,30 @@ async function getSummary() {
   };
 }
 
+// A lista so entrega tickets com o cadastro completo (cliente, fila, atendente,
+// empresa e horario). Registros parciais — tipicamente uma linha do MTalk lida
+// pela metade, em que so a fila foi reconhecida — sao contados em
+// "incompletosOcultos" em vez de virarem linhas cheias de "-".
 async function getMissingTags(filters = {}) {
   const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
   const limit = Math.min(Number(filters.limit || 500), 1000);
+  const rankedSql = buildRankedTicketsSql(where);
+  const attendantSql = buildAttendantCaseSql();
+
   const rows = await database
     .prepare(
       `
-      WITH filtered AS (
-        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
-        FROM tickets
-        ${where}
-      ),
-      ranked AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY dedupeKey
-            ORDER BY datetime(collected_at) DESC, id DESC
-          ) AS rowNumber
-        FROM filtered
-      )
+      ${rankedSql}
       SELECT
         id,
         snapshot_id AS "snapshotId",
-        client_name AS "clientName",
+        ${SANITIZED_CLIENT_NAME_SQL} AS "clientName",
         queue_name AS queue,
-        attendant,
+        ${attendantSql} AS attendant,
         company,
         display_time AS "displayTime",
+        inactivity_minutes AS "inactivityMinutes",
         tag,
         tag_status AS "tagStatus",
         source_url AS url,
@@ -151,13 +169,77 @@ async function getMissingTags(filters = {}) {
       FROM ranked
       WHERE rowNumber = 1
         AND tag_status = 'SEM_TAG'
+        AND ${COMPLETE_TICKET_SQL}
       ORDER BY datetime(collected_at) DESC, id DESC
       LIMIT ?
     `
     )
     .all(...params, limit);
 
-  return { items: rows.map(sanitizeTicketRow) };
+  const counters = await database
+    .prepare(
+      `
+      ${rankedSql}
+      SELECT
+        COUNT(*) AS "totalSemTag",
+        SUM(CASE WHEN ${COMPLETE_TICKET_SQL} THEN 1 ELSE 0 END) AS "totalCompletos"
+      FROM ranked
+      WHERE rowNumber = 1
+        AND tag_status = 'SEM_TAG'
+    `
+    )
+    .get(...params);
+
+  const totalSemTag = Number(counters?.totalSemTag || 0);
+  const totalCompletos = Number(counters?.totalCompletos || 0);
+
+  return {
+    items: rows.map(sanitizeTicketRow),
+    total: totalCompletos,
+    incompletosOcultos: totalSemTag - totalCompletos
+  };
+}
+
+// Valores distintos que realmente existem nos dados, para alimentar os filtros
+// do painel. Considera apenas o recorte de datas: se dependesse tambem dos
+// filtros de texto, escolher um atendente esvaziaria a lista de empresas.
+async function getFilterOptions(filters = {}) {
+  const database = await getDatabase();
+  const { where, params } = buildTicketFilters({
+    day: filters.day,
+    startDate: filters.startDate,
+    endDate: filters.endDate
+  });
+
+  const [attendants, companies, queues, clients] = await Promise.all([
+    selectDistinctValues(database, buildAttendantCaseSql(), where, params),
+    selectDistinctValues(database, "trim(coalesce(company, ''))", where, params),
+    selectDistinctValues(database, "trim(coalesce(queue_name, ''))", where, params),
+    selectDistinctValues(database, SANITIZED_CLIENT_NAME_SQL, where, params)
+  ]);
+
+  return { attendants, companies, queues, clients };
+}
+
+async function selectDistinctValues(database, expression, where, params) {
+  const rows = await database
+    .prepare(
+      `
+      SELECT value
+      FROM (
+        SELECT ${expression} AS value
+        FROM tickets
+        ${where}
+      ) AS valores
+      WHERE value IS NOT NULL AND trim(value) <> ''
+      GROUP BY value
+      ORDER BY value
+      LIMIT 500
+    `
+    )
+    .all(...params);
+
+  return rows.map((row) => row.value);
 }
 
 async function getInactivitySummary(filters = {}) {
@@ -166,19 +248,7 @@ async function getInactivitySummary(filters = {}) {
   const row = await database
     .prepare(
       `
-      WITH filtered AS (
-        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
-        FROM tickets
-        ${where}
-      ),
-      ranked AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY dedupeKey
-            ORDER BY datetime(collected_at) DESC, id DESC
-          ) AS rowNumber
-        FROM filtered
-      )
+      ${buildRankedTicketsSql(where)}
       SELECT
         COUNT(*) AS "inactiveTickets",
         MAX(COALESCE(inactivity_minutes, 0)) AS "maxInactivityMinutes",
@@ -187,7 +257,7 @@ async function getInactivitySummary(filters = {}) {
       FROM ranked
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
-        AND (${SANITIZED_CLIENT_KEY_SQL}) <> ''
+        AND ${COMPLETE_TICKET_SQL}
     `
     )
     .get(...params, INACTIVITY_THRESHOLD_MINUTES);
@@ -208,25 +278,13 @@ async function getInactiveTickets(filters = {}) {
   const rows = await database
     .prepare(
       `
-      WITH filtered AS (
-        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
-        FROM tickets
-        ${where}
-      ),
-      ranked AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY dedupeKey
-            ORDER BY datetime(collected_at) DESC, id DESC
-          ) AS rowNumber
-        FROM filtered
-      )
+      ${buildRankedTicketsSql(where)}
       SELECT
         id,
         snapshot_id AS "snapshotId",
-        client_name AS "clientName",
+        ${SANITIZED_CLIENT_NAME_SQL} AS "clientName",
         queue_name AS queue,
-        attendant,
+        ${buildAttendantCaseSql()} AS attendant,
         company,
         display_time AS "displayTime",
         inactivity_minutes AS "inactivityMinutes",
@@ -237,7 +295,7 @@ async function getInactiveTickets(filters = {}) {
       FROM ranked
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
-        AND (${SANITIZED_CLIENT_KEY_SQL}) <> ''
+        AND ${COMPLETE_TICKET_SQL}
       ORDER BY COALESCE(inactivity_minutes, 0) DESC, datetime(collected_at) DESC, id DESC
       LIMIT ?
     `
@@ -254,19 +312,7 @@ async function getInactivityByAttendant(filters = {}) {
   const rows = await database
     .prepare(
       `
-      WITH filtered AS (
-        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
-        FROM tickets
-        ${where}
-      ),
-      ranked AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY dedupeKey
-            ORDER BY datetime(collected_at) DESC, id DESC
-          ) AS rowNumber
-        FROM filtered
-      ),
+      ${buildRankedTicketsSql(where)},
       normalized AS (
         SELECT
           *,
@@ -282,7 +328,7 @@ async function getInactivityByAttendant(filters = {}) {
       FROM normalized
       WHERE normalizedAttendant <> ''
         AND COALESCE(inactivity_minutes, 0) > ?
-        AND (${SANITIZED_CLIENT_KEY_SQL}) <> ''
+        AND ${COMPLETE_TICKET_SQL}
       GROUP BY normalizedAttendant
       ORDER BY "inactiveTickets" DESC, "maxInactivityMinutes" DESC
     `
@@ -298,19 +344,7 @@ async function getInactivityByCompany(filters = {}) {
   const rows = await database
     .prepare(
       `
-      WITH filtered AS (
-        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
-        FROM tickets
-        ${where}
-      ),
-      ranked AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY dedupeKey
-            ORDER BY datetime(collected_at) DESC, id DESC
-          ) AS rowNumber
-        FROM filtered
-      )
+      ${buildRankedTicketsSql(where)}
       SELECT
         COALESCE(NULLIF(company, ''), 'Nao identificada') AS company,
         COUNT(*) AS "inactiveTickets",
@@ -319,7 +353,7 @@ async function getInactivityByCompany(filters = {}) {
       FROM ranked
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
-        AND (${SANITIZED_CLIENT_KEY_SQL}) <> ''
+        AND ${COMPLETE_TICKET_SQL}
       GROUP BY COALESCE(NULLIF(company, ''), 'Nao identificada')
       ORDER BY "inactiveTickets" DESC, "maxInactivityMinutes" DESC
     `
@@ -336,19 +370,7 @@ async function getReportByAttendant(filters = {}) {
   const rows = await database
     .prepare(
       `
-      WITH filtered AS (
-        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
-        FROM tickets
-        ${where}
-      ),
-      ranked AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY dedupeKey
-            ORDER BY datetime(collected_at) DESC, id DESC
-          ) AS rowNumber
-        FROM filtered
-      ),
+      ${buildRankedTicketsSql(where)},
       normalized AS (
         SELECT
           *,
@@ -378,19 +400,7 @@ async function getReportByQueue(filters = {}) {
   const rows = await database
     .prepare(
       `
-      WITH filtered AS (
-        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
-        FROM tickets
-        ${where}
-      ),
-      ranked AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY dedupeKey
-            ORDER BY datetime(collected_at) DESC, id DESC
-          ) AS rowNumber
-        FROM filtered
-      )
+      ${buildRankedTicketsSql(where)}
       SELECT
         COALESCE(NULLIF(queue_name, ''), 'Nao identificada') AS queue,
         COUNT(*) AS "totalTickets",
@@ -598,6 +608,7 @@ function withInactivityStats(row) {
 
 module.exports = {
   getSummary,
+  getFilterOptions,
   getMissingTags,
   getInactivitySummary,
   getInactiveTickets,

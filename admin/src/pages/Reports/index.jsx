@@ -1,18 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { Download, Filter, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
+import FilterBar, { emptyFilters } from "../../components/FilterBar";
 import { api } from "../../services/api";
-
-const emptyFilters = {
-  day: "",
-  attendant: "",
-  queue: "",
-  company: "",
-  clientName: ""
-};
 
 export default function Reports() {
   const [filters, setFilters] = useState(emptyFilters);
   const [tickets, setTickets] = useState([]);
+  const [hiddenCount, setHiddenCount] = useState(0);
   const [attendants, setAttendants] = useState([]);
   const [queues, setQueues] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -28,6 +22,7 @@ export default function Reports() {
         api.byQueue(activeFilters)
       ]);
       setTickets(missingData.items || []);
+      setHiddenCount(Number(missingData.incompletosOcultos || 0));
       setAttendants(attendantData.items || []);
       setQueues(queueData.items || []);
     } catch (requestError) {
@@ -45,24 +40,20 @@ export default function Reports() {
     setFilters((current) => ({ ...current, [key]: value }));
   }
 
-  function handleSubmit(event) {
-    event.preventDefault();
-    load(filters);
-  }
-
   function clearFilters() {
     setFilters(emptyFilters);
     load(emptyFilters);
   }
 
   function exportCsv() {
-    const headers = ["Cliente", "Fila", "Atendente", "Empresa", "Horario", "Coletado em", "URL"];
+    const headers = ["Cliente", "Fila", "Atendente", "Empresa", "Horario", "Sem resposta (min)", "Coletado em", "URL"];
     const rows = tickets.map((ticket) => [
       ticket.clientName,
       ticket.queue,
       ticket.attendant,
       ticket.company,
       ticket.displayTime,
+      ticket.inactivityMinutes ?? "",
       ticket.collectedAt,
       ticket.url
     ]);
@@ -89,46 +80,26 @@ export default function Reports() {
         </button>
       </div>
 
-      <form className="filters" onSubmit={handleSubmit}>
-        <label>
-          Dia
-          <input type="date" value={filters.day} onChange={(event) => updateFilter("day", event.target.value)} />
-        </label>
-        <label>
-          Atendente
-          <input value={filters.attendant} onChange={(event) => updateFilter("attendant", event.target.value)} />
-        </label>
-        <label>
-          Fila
-          <input value={filters.queue} onChange={(event) => updateFilter("queue", event.target.value)} />
-        </label>
-        <label>
-          Empresa
-          <input value={filters.company} onChange={(event) => updateFilter("company", event.target.value)} />
-        </label>
-        <label>
-          Cliente
-          <input value={filters.clientName} onChange={(event) => updateFilter("clientName", event.target.value)} />
-        </label>
-        <div className="filter-actions">
-          <button className="primary-button" type="submit">
-            <Filter aria-hidden="true" size={17} />
-            Filtrar
-          </button>
-          <button className="secondary-button" type="button" onClick={clearFilters}>
-            Limpar
-          </button>
-          <button className="secondary-button" type="button" onClick={exportCsv} disabled={!tickets.length}>
-            <Download aria-hidden="true" size={17} />
-            CSV
-          </button>
-        </div>
-      </form>
+      <FilterBar
+        filters={filters}
+        onChange={updateFilter}
+        onApply={load}
+        onClear={clearFilters}
+        onExport={exportCsv}
+        exportDisabled={!tickets.length}
+      />
 
       {error ? <p className="notice error">{error}</p> : null}
 
+      {hiddenCount ? (
+        <p className="notice">
+          {hiddenCount} {hiddenCount === 1 ? "registro incompleto foi ocultado" : "registros incompletos foram ocultados"}: a
+          leitura do MTalk nao identificou cliente, atendente, empresa ou horario.
+        </p>
+      ) : null}
+
       <section className="table-panel">
-        <h3>Lista de tickets sem TAG</h3>
+        <h3>Lista de tickets sem TAG ({tickets.length})</h3>
         <div className="table-scroll">
           <table>
             <thead>
@@ -138,28 +109,30 @@ export default function Reports() {
                 <th>Atendente</th>
                 <th>Empresa</th>
                 <th>Horario</th>
+                <th>Sem resposta</th>
                 <th>Coleta</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="6">Carregando...</td>
+                  <td colSpan="7">Carregando...</td>
                 </tr>
               ) : tickets.length ? (
                 tickets.map((ticket) => (
                   <tr key={ticket.id}>
-                    <td>{ticket.clientName || "-"}</td>
-                    <td>{ticket.queue || "-"}</td>
-                    <td>{ticket.attendant || "-"}</td>
-                    <td>{ticket.company || "-"}</td>
-                    <td>{ticket.displayTime || "-"}</td>
+                    <td>{ticket.clientName}</td>
+                    <td>{ticket.queue}</td>
+                    <td>{ticket.attendant}</td>
+                    <td>{ticket.company}</td>
+                    <td>{ticket.displayTime}</td>
+                    <td>{formatMinutes(ticket.inactivityMinutes)}</td>
                     <td>{formatDate(ticket.collectedAt)}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="6">Nenhum ticket sem TAG encontrado.</td>
+                  <td colSpan="7">Nenhum ticket sem TAG encontrado.</td>
                 </tr>
               )}
             </tbody>
@@ -212,7 +185,12 @@ function MiniReport({ title, rows, labelKey }) {
 }
 
 function csvCell(value) {
-  return `"${String(value || "").replace(/"/g, '""')}"`;
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function formatMinutes(value) {
+  const minutes = Number(value || 0);
+  return minutes ? `${minutes} min` : "-";
 }
 
 function formatDate(value) {

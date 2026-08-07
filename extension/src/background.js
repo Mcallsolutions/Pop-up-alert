@@ -186,6 +186,14 @@ async function describeHttpFailure(response, config) {
     return `A API recusou o conteudo do snapshot (400).${detalhe}`;
   }
 
+  if (response.status === 404) {
+    return `A API respondeu "rota nao encontrada" (404) para ${response.url}. Confirme a URL da API no campo acima (sem "/api" no final) e se o deploy da Vercel esta atualizado.${detalhe}`;
+  }
+
+  if (response.status === 503) {
+    return `A API esta no ar mas o banco nao respondeu (503). Confira DATABASE_URL/POSTGRES_URL na Vercel.${detalhe}`;
+  }
+
   return `API respondeu ${response.status}.${detalhe}`;
 }
 
@@ -236,8 +244,25 @@ async function checkApiHealth() {
       throw new Error(await describeHttpFailure(response, config));
     }
     const health = await response.json();
+
+    // O /health nao exige token, entao sozinho ele daria "conectado" mesmo com
+    // token errado e todo snapshot voltando 401. O ping fecha essa lacuna.
+    const pingHeaders = config.extensionToken ? { "x-extension-token": config.extensionToken } : {};
+    const ping = await fetch(`${config.apiBaseUrl}/api/tickets/ping`, { method: "POST", headers: pingHeaders });
+
+    // 404/405 = API no ar, mas em uma versao anterior a esta rota. Nesse caso a
+    // conexao esta ok e so a verificacao extra de token nao pode ser feita.
+    if (ping.status === 404 || ping.status === 405) {
+      const status = await updateStatus({ apiStatus: "conectado", lastError: "" });
+      return { ok: true, health, tokenVerificado: false, status };
+    }
+
+    if (!ping.ok) {
+      throw new Error(await describeHttpFailure(ping, config));
+    }
+
     const status = await updateStatus({ apiStatus: "conectado", lastError: "" });
-    return { ok: true, health, status };
+    return { ok: true, health, tokenVerificado: true, status };
   } catch (error) {
     const status = await updateStatus({
       apiStatus: "erro",

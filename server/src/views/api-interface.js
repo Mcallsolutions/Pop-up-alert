@@ -219,6 +219,7 @@ function renderApiInterface() {
           <p>Envia um snapshot de exemplo com um ticket sem TAG e um ticket com TAG.</p>
           <div class="actions">
             <button type="button" data-action="snapshot">Enviar snapshot teste</button>
+            <button type="button" class="secondary" data-action="ping">Testar /api/tickets/ping</button>
           </div>
         </section>
       </div>
@@ -249,8 +250,10 @@ function renderApiInterface() {
             <tr><td>GET</td><td><code>/health</code></td><td>Status da API</td><td>Nao</td></tr>
             <tr><td>POST</td><td><code>/api/auth/login</code></td><td>Autentica administrador</td><td>Nao</td></tr>
             <tr><td>GET</td><td><code>/api/auth/me</code></td><td>Dados do usuario logado</td><td>JWT</td></tr>
+            <tr><td>POST</td><td><code>/api/tickets/ping</code></td><td>Testa conectividade e token da extensao</td><td>Token opcional da extensao</td></tr>
             <tr><td>POST</td><td><code>/api/tickets/snapshot</code></td><td>Recebe leitura enviada pela extensao</td><td>Token opcional da extensao</td></tr>
             <tr><td>GET</td><td><code>/api/reports/summary</code></td><td>Resumo geral dos snapshots</td><td>JWT</td></tr>
+            <tr><td>GET</td><td><code>/api/reports/filters</code></td><td>Valores disponiveis para os filtros do painel</td><td>JWT</td></tr>
             <tr><td>GET</td><td><code>/api/reports/missing-tags</code></td><td>Lista tickets sem TAG</td><td>JWT</td></tr>
             <tr><td>GET</td><td><code>/api/reports/by-attendant</code></td><td>Relatorio por atendente</td><td>JWT</td></tr>
             <tr><td>GET</td><td><code>/api/reports/by-queue</code></td><td>Relatorio por fila</td><td>JWT</td></tr>
@@ -280,6 +283,7 @@ function renderApiInterface() {
           if (action === "health") return show(await request("/health", { auth: false }), "GET /health");
           if (action === "login") return login();
           if (action === "me") return show(await request("/api/auth/me"), "GET /api/auth/me");
+          if (action === "ping") return show(await request("/api/tickets/ping", { method: "POST", auth: false }), "POST /api/tickets/ping");
           if (action === "snapshot") return show(await request("/api/tickets/snapshot", { method: "POST", auth: false, body: sampleSnapshot() }), "POST /api/tickets/snapshot");
           if (action === "summary") return show(await request("/api/reports/summary"), "GET /api/reports/summary");
           if (action === "missing") return show(await request("/api/reports/missing-tags"), "GET /api/reports/missing-tags");
@@ -378,8 +382,10 @@ function getApiCatalog() {
       { method: "GET", path: "/health", auth: false, description: "Status da API" },
       { method: "POST", path: "/api/auth/login", auth: false, description: "Autentica administrador" },
       { method: "GET", path: "/api/auth/me", auth: "JWT", description: "Dados do usuario logado" },
+      { method: "POST", path: "/api/tickets/ping", auth: "EXTENSION_TOKEN opcional", description: "Testa conectividade e token da extensao" },
       { method: "POST", path: "/api/tickets/snapshot", auth: "EXTENSION_TOKEN opcional", description: "Recebe leitura da extensao" },
       { method: "GET", path: "/api/reports/summary", auth: "JWT", description: "Resumo geral" },
+      { method: "GET", path: "/api/reports/filters", auth: "JWT", description: "Valores disponiveis para os filtros do painel" },
       { method: "GET", path: "/api/reports/missing-tags", auth: "JWT", description: "Tickets sem TAG" },
       { method: "GET", path: "/api/reports/by-attendant", auth: "JWT", description: "Relatorio por atendente" },
       { method: "GET", path: "/api/reports/by-queue", auth: "JWT", description: "Relatorio por fila" }
