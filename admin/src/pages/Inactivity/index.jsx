@@ -125,9 +125,9 @@ export default function Inactivity() {
                   <tr key={ticket.id}>
                     <td>{ticket.clientName}</td>
                     <td>{ticket.queue}</td>
-                    <td>{ticket.attendant}</td>
-                    <td>{ticket.company}</td>
-                    <td>{ticket.displayTime}</td>
+                    <td>{ticket.attendant || "-"}</td>
+                    <td>{ticket.company || "-"}</td>
+                    <td>{ticket.displayTime || "-"}</td>
                     <td>{formatMinutes(ticket.inactivityMinutes)}</td>
                     <td>{formatDate(ticket.collectedAt)}</td>
                   </tr>

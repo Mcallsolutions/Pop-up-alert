@@ -73,15 +73,17 @@ const REPORT_DEDUPE_KEY_SQL = `
   END
 `;
 
-// Um ticket so entra nos relatorios de lista quando os cinco campos que o
-// identificam foram lidos. Sem isso a tela mostra linhas em que apenas a fila
-// foi reconhecida e todo o resto vira "-".
-const COMPLETE_TICKET_SQL = `(
+// Um ticket so entra nas listas quando da para saber DE QUEM ele e: cliente
+// identificado e fila. E o caso que o painel precisava parar de mostrar —
+// linhas em que so a fila foi lida e todo o resto virava "-".
+//
+// Nao exigir aqui atendente nem empresa e proposital: na tela do MTalk esses
+// dois campos sao alternativos (a coluna mostra um ou o outro). Nos dados
+// reais, 29% dos tickets tem atendente, 22% tem empresa e apenas 12% tem os
+// dois — exigir ambos derrubava a lista de 119 para 7 itens.
+const IDENTIFIED_TICKET_SQL = `(
   (${SANITIZED_CLIENT_NAME_SQL}) <> ''
-  AND (${buildAttendantCaseSql()}) <> ''
   AND trim(coalesce(queue_name, '')) <> ''
-  AND trim(coalesce(company, '')) <> ''
-  AND trim(coalesce(display_time, '')) <> ''
 )`;
 
 // Prefixo comum das consultas: aplica os filtros e mantem, de cada ticket
@@ -138,9 +140,8 @@ async function getSummary(filters = {}) {
   };
 }
 
-// A lista so entrega tickets com o cadastro completo (cliente, fila, atendente,
-// empresa e horario). Registros parciais — tipicamente uma linha do MTalk lida
-// pela metade, em que so a fila foi reconhecida — sao contados em
+// A lista so entrega tickets identificados (ver IDENTIFIED_TICKET_SQL).
+// Registros em que a leitura reconheceu apenas a fila sao contados em
 // "incompletosOcultos" em vez de virarem linhas cheias de "-".
 async function getMissingTags(filters = {}) {
   const database = await getDatabase();
@@ -169,7 +170,7 @@ async function getMissingTags(filters = {}) {
       FROM ranked
       WHERE rowNumber = 1
         AND tag_status = 'SEM_TAG'
-        AND ${COMPLETE_TICKET_SQL}
+        AND ${IDENTIFIED_TICKET_SQL}
       ORDER BY datetime(collected_at) DESC, id DESC
       LIMIT ?
     `
@@ -182,7 +183,7 @@ async function getMissingTags(filters = {}) {
       ${rankedSql}
       SELECT
         COUNT(*) AS "totalSemTag",
-        SUM(CASE WHEN ${COMPLETE_TICKET_SQL} THEN 1 ELSE 0 END) AS "totalCompletos"
+        SUM(CASE WHEN ${IDENTIFIED_TICKET_SQL} THEN 1 ELSE 0 END) AS "totalIdentificados"
       FROM ranked
       WHERE rowNumber = 1
         AND tag_status = 'SEM_TAG'
@@ -191,12 +192,12 @@ async function getMissingTags(filters = {}) {
     .get(...params);
 
   const totalSemTag = Number(counters?.totalSemTag || 0);
-  const totalCompletos = Number(counters?.totalCompletos || 0);
+  const totalIdentificados = Number(counters?.totalIdentificados || 0);
 
   return {
     items: rows.map(sanitizeTicketRow),
-    total: totalCompletos,
-    incompletosOcultos: totalSemTag - totalCompletos
+    total: totalIdentificados,
+    incompletosOcultos: totalSemTag - totalIdentificados
   };
 }
 
@@ -257,7 +258,7 @@ async function getInactivitySummary(filters = {}) {
       FROM ranked
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
-        AND ${COMPLETE_TICKET_SQL}
+        AND ${IDENTIFIED_TICKET_SQL}
     `
     )
     .get(...params, INACTIVITY_THRESHOLD_MINUTES);
@@ -295,7 +296,7 @@ async function getInactiveTickets(filters = {}) {
       FROM ranked
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
-        AND ${COMPLETE_TICKET_SQL}
+        AND ${IDENTIFIED_TICKET_SQL}
       ORDER BY COALESCE(inactivity_minutes, 0) DESC, datetime(collected_at) DESC, id DESC
       LIMIT ?
     `
@@ -328,7 +329,7 @@ async function getInactivityByAttendant(filters = {}) {
       FROM normalized
       WHERE normalizedAttendant <> ''
         AND COALESCE(inactivity_minutes, 0) > ?
-        AND ${COMPLETE_TICKET_SQL}
+        AND ${IDENTIFIED_TICKET_SQL}
       GROUP BY normalizedAttendant
       ORDER BY "inactiveTickets" DESC, "maxInactivityMinutes" DESC
     `
@@ -353,7 +354,7 @@ async function getInactivityByCompany(filters = {}) {
       FROM ranked
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
-        AND ${COMPLETE_TICKET_SQL}
+        AND ${IDENTIFIED_TICKET_SQL}
       GROUP BY COALESCE(NULLIF(company, ''), 'Nao identificada')
       ORDER BY "inactiveTickets" DESC, "maxInactivityMinutes" DESC
     `

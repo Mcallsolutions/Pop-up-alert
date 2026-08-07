@@ -221,10 +221,13 @@ Todos os endpoints de `/api/reports` aceitam os mesmos filtros por query string:
 A busca por texto e parcial e ignora maiusculas; `attendant` tambem casa com as variacoes
 do nome gravadas pelo MTalk (`Alek`, `Alek NETFIBRA`, ... todas caem em `Aleksandro`).
 
-As listas de tickets (`missing-tags` e `inactivity/tickets`) so retornam registros com
-cliente, fila, atendente, empresa e horario identificados. Leituras parciais nao viram
+As listas de tickets (`missing-tags` e `inactivity/tickets`) so retornam registros em que
+o **cliente** foi identificado. Linhas em que a leitura reconheceu apenas a fila nao viram
 linhas vazias na tabela: elas sao contadas em `incompletosOcultos` na resposta de
 `missing-tags`, e o painel mostra esse numero abaixo dos filtros.
+
+Atendente e empresa nao entram nessa exigencia de proposito: na tela do MTalk os dois sao
+alternativos (a coluna mostra um ou o outro), entao exigir ambos esvaziaria a lista.
 
 Endpoints da extensao:
 

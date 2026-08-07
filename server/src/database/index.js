@@ -244,18 +244,41 @@ async function runPostgresMigrations(postgres) {
   }
 }
 
+// As variaveis de ambiente sao a unica fonte da credencial do painel — nao ha
+// tela para trocar a senha. Por isso o seed nao pode so criar o admin: ele
+// tambem re-sincroniza nome e senha quando ADMIN_* muda entre deploys. Sem
+// isso, trocar ADMIN_PASSWORD nao surtia efeito algum e o login continuava
+// respondendo "Credenciais invalidas" com a senha nova.
 async function seedAdmin(activeDatabase) {
   const email = String(process.env.ADMIN_EMAIL || "admin@mcall.local").trim().toLowerCase();
   const name = process.env.ADMIN_NAME || "Administrador";
   const password = process.env.ADMIN_PASSWORD || "admin123";
-  const existing = await activeDatabase.prepare("SELECT id FROM admins WHERE email = ?").get(email);
+  const existing = await activeDatabase
+    .prepare('SELECT id, name, password_hash AS "passwordHash" FROM admins WHERE email = ?')
+    .get(email);
 
   if (!existing) {
-    const passwordHash = bcrypt.hashSync(password, 10);
     await activeDatabase
       .prepare("INSERT INTO admins (email, name, password_hash) VALUES (?, ?, ?)")
-      .run(email, name, passwordHash);
+      .run(email, name, bcrypt.hashSync(password, 10));
+    console.log(`[DB] Admin ${email} criado a partir das variaveis ADMIN_*.`);
+    return;
   }
+
+  // O hash muda a cada chamada de hashSync (salt aleatorio), entao a comparacao
+  // e feita contra o hash gravado — assim so ha escrita quando a senha mudou.
+  const senhaMudou = !bcrypt.compareSync(password, existing.passwordHash);
+  const nomeMudou = existing.name !== name;
+
+  if (!senhaMudou && !nomeMudou) {
+    return;
+  }
+
+  await activeDatabase
+    .prepare("UPDATE admins SET name = ?, password_hash = ? WHERE id = ?")
+    .run(name, senhaMudou ? bcrypt.hashSync(password, 10) : existing.passwordHash, existing.id);
+
+  console.log(`[DB] Admin ${email} atualizado a partir das variaveis ADMIN_* (senha: ${senhaMudou ? "trocada" : "mantida"}).`);
 }
 
 function getPostgresUrl() {

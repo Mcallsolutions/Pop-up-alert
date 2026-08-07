@@ -93,8 +93,8 @@ export default function Reports() {
 
       {hiddenCount ? (
         <p className="notice">
-          {hiddenCount} {hiddenCount === 1 ? "registro incompleto foi ocultado" : "registros incompletos foram ocultados"}: a
-          leitura do MTalk nao identificou cliente, atendente, empresa ou horario.
+          {hiddenCount} {hiddenCount === 1 ? "registro foi ocultado" : "registros foram ocultados"}: a leitura do MTalk
+          reconheceu apenas a fila, sem identificar o cliente.
         </p>
       ) : null}
 
@@ -123,9 +123,9 @@ export default function Reports() {
                   <tr key={ticket.id}>
                     <td>{ticket.clientName}</td>
                     <td>{ticket.queue}</td>
-                    <td>{ticket.attendant}</td>
-                    <td>{ticket.company}</td>
-                    <td>{ticket.displayTime}</td>
+                    <td>{ticket.attendant || "-"}</td>
+                    <td>{ticket.company || "-"}</td>
+                    <td>{ticket.displayTime || "-"}</td>
                     <td>{formatMinutes(ticket.inactivityMinutes)}</td>
                     <td>{formatDate(ticket.collectedAt)}</td>
                   </tr>
