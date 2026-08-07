@@ -1,22 +1,27 @@
 import React, { useState } from "react";
 import { LogIn } from "lucide-react";
-import { api } from "../../services/api";
+import { api, getApiBaseUrl } from "../../services/api";
 
 export default function Login({ onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [target, setTarget] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
+    setTarget("");
     setLoading(true);
     try {
       const data = await api.login({ email, password });
       onLogin(data);
     } catch (requestError) {
       setError(requestError.message || "Nao foi possivel entrar");
+      // Mostrar o endereco chamado facilita diagnosticar erro de CORS:
+      // se nao for o mesmo dominio da pagina, a API esta configurada errada.
+      setTarget(`${getApiBaseUrl() || window.location.origin}/api/auth/login`);
     } finally {
       setLoading(false);
     }
@@ -49,7 +54,17 @@ export default function Login({ onLogin }) {
           />
         </label>
 
-        {error ? <p className="form-error">{error}</p> : null}
+        {error ? (
+          <p className="form-error">
+            {error}
+            {target ? (
+              <>
+                <br />
+                <small>API chamada: {target}</small>
+              </>
+            ) : null}
+          </p>
+        ) : null}
 
         <button className="primary-button" type="submit" disabled={loading}>
           <LogIn aria-hidden="true" size={18} />

@@ -12,6 +12,9 @@ const reportRoutes = require("./routes/reports.routes");
 const { renderApiInterface, getApiCatalog } = require("./views/api-interface");
 
 const DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://localhost:8080,chrome-extension://";
+// Marcador de versao da logica de CORS. Serve para confirmar, via
+// GET /api/debug/cors, qual versao do codigo esta realmente no ar.
+const CORS_CHECK_VERSION = 3;
 const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 
 const app = express();
@@ -68,6 +71,36 @@ app.get("/api", (_req, res) => {
   res.json(getApiCatalog());
 });
 
+// Diagnostico de CORS. Mostra exatamente o que a API recebe e como decide.
+// Nao expoe segredos: CORS_ORIGINS e uma lista de dominios publicos.
+app.get("/api/debug/cors", (req, res) => {
+  const origin = req.headers.origin || null;
+
+  res.json({
+    corsCheckVersion: CORS_CHECK_VERSION,
+    origemRecebida: origin,
+    host: req.headers.host || null,
+    xForwardedHost: req.headers["x-forwarded-host"] || null,
+    xForwardedProto: req.headers["x-forwarded-proto"] || null,
+    reqProtocol: req.protocol,
+    decisao: origin
+      ? {
+          mesmaOrigem: isSameOrigin(req, origin),
+          naListaLiberada: isAllowedOrigin(origin),
+          permitido: isSameOrigin(req, origin) || isAllowedOrigin(origin)
+        }
+      : { permitido: true, motivo: "requisicao sem header Origin" },
+    corsOriginsBruto: process.env.CORS_ORIGINS ?? null,
+    corsOriginsInterpretado: parseConfiguredOrigins(),
+    dominiosVercel: {
+      VERCEL_URL: process.env.VERCEL_URL || null,
+      VERCEL_PROJECT_PRODUCTION_URL: process.env.VERCEL_PROJECT_PRODUCTION_URL || null,
+      VERCEL_BRANCH_URL: process.env.VERCEL_BRANCH_URL || null
+    },
+    nodeEnv: process.env.NODE_ENV || null
+  });
+});
+
 // Interface HTML de teste da API.
 // Em producao (projeto unico na Vercel) o "/" serve o painel admin,
 // por isso a interface tambem responde em "/api/console".
@@ -118,9 +151,21 @@ function corsOptionsDelegate(req, callback) {
     return;
   }
 
+  // Log detalhado para aparecer nos Runtime Logs da Vercel.
+  console.warn(
+    "[CORS] bloqueado |",
+    JSON.stringify({
+      corsCheckVersion: CORS_CHECK_VERSION,
+      origem: origin,
+      host: req.headers.host || null,
+      xForwardedHost: req.headers["x-forwarded-host"] || null,
+      listaLiberada: parseConfiguredOrigins()
+    })
+  );
+
   const error = new Error(`Origem nao permitida pelo CORS: ${origin}`);
   error.statusCode = 403;
-  error.publicMessage = `Origem nao permitida pelo CORS: ${origin}`;
+  error.publicMessage = `Origem nao permitida pelo CORS: ${origin} (corsCheck v${CORS_CHECK_VERSION})`;
   callback(error);
 }
 
@@ -136,11 +181,17 @@ function isSameOrigin(req, origin) {
   return protocols.some((protocol) => normalizeOrigin(`${protocol}://${host}`) === normalizeOrigin(origin));
 }
 
-function isAllowedOrigin(origin) {
-  const configured = String(process.env.CORS_ORIGINS || DEFAULT_CORS_ORIGINS)
-    .split(",")
-    .map((item) => item.trim())
+// Aceita a lista separada por virgula OU por quebra de linha, e remove aspas
+// que costumam vir junto quando o valor e colado no painel da Vercel.
+function parseConfiguredOrigins() {
+  return String(process.env.CORS_ORIGINS || DEFAULT_CORS_ORIGINS)
+    .split(/[,\n;]/)
+    .map((item) => item.trim().replace(/^["']|["']$/g, "").trim())
     .filter(Boolean);
+}
+
+function isAllowedOrigin(origin) {
+  const configured = parseConfiguredOrigins();
 
   // Dominios que a Vercel injeta: URL do deploy, dominio de producao e da branch.
   const vercelHosts = [
