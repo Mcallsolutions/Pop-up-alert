@@ -67,7 +67,7 @@ async function saveConfig(event) {
 }
 
 function renderConfig(config = {}) {
-  elements.apiBaseUrl.value = config.apiBaseUrl || "http://localhost:3333";
+  elements.apiBaseUrl.value = config.apiBaseUrl || "https://pop-up-alert.vercel.app";
   elements.extensionToken.value = config.extensionToken || "";
 }
 

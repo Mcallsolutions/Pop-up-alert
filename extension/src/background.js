@@ -135,16 +135,17 @@ async function sendSnapshot(payload) {
     headers["x-extension-token"] = config.extensionToken;
   }
 
+  const endpoint = `${config.apiBaseUrl}/api/tickets/snapshot`;
+
   try {
-    const response = await fetch(`${config.apiBaseUrl}/api/tickets/snapshot`, {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(payload)
     });
 
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || `API respondeu ${response.status}`);
+      throw new Error(await describeHttpFailure(response, config));
     }
 
     const data = await response.json();
@@ -158,10 +159,44 @@ async function sendSnapshot(payload) {
   } catch (error) {
     const status = await updateStatus({
       apiStatus: "erro",
-      lastError: error.message || "Falha ao enviar snapshot"
+      lastError: describeSendFailure(error, endpoint)
     });
+    console.error("[Mcall Monitor] falha ao enviar snapshot para", endpoint, error);
     return { ok: false, error: status.lastError, status };
   }
+}
+
+// Mensagens acionaveis: sem isso o popup mostra apenas "Failed to fetch",
+// que nao diz se o problema e URL errada, token ou API fora do ar.
+async function describeHttpFailure(response, config) {
+  const corpo = await response.text().catch(() => "");
+  const detalhe = corpo ? ` Detalhe: ${corpo.slice(0, 200)}` : "";
+
+  if (response.status === 401) {
+    return config.extensionToken
+      ? `A API recusou o token da extensao (401). O valor em EXTENSION_TOKEN na Vercel precisa ser identico ao configurado aqui.${detalhe}`
+      : `A API exige um token da extensao (401), mas nenhum esta configurado aqui. Copie o valor de EXTENSION_TOKEN da Vercel para o campo "Token da extensao".${detalhe}`;
+  }
+
+  if (response.status === 403) {
+    return `A API bloqueou a origem da extensao (403). Adicione "chrome-extension://${chrome.runtime.id}" em CORS_ORIGINS na Vercel.${detalhe}`;
+  }
+
+  if (response.status === 400) {
+    return `A API recusou o conteudo do snapshot (400).${detalhe}`;
+  }
+
+  return `API respondeu ${response.status}.${detalhe}`;
+}
+
+function describeSendFailure(error, endpoint) {
+  const mensagem = error?.message || "Falha ao enviar snapshot";
+
+  if (/failed to fetch|networkerror|load failed/i.test(mensagem)) {
+    return `Nao foi possivel alcancar ${endpoint}. Confirme a URL da API no campo acima e se o endereco esta acessivel.`;
+  }
+
+  return mensagem;
 }
 
 function countTickets(tickets) {
@@ -194,10 +229,11 @@ async function forceActiveTabScan() {
 
 async function checkApiHealth() {
   const config = await getConfig();
+  const endpoint = `${config.apiBaseUrl}/health`;
   try {
-    const response = await fetch(`${config.apiBaseUrl}/health`);
+    const response = await fetch(endpoint);
     if (!response.ok) {
-      throw new Error(`API respondeu ${response.status}`);
+      throw new Error(await describeHttpFailure(response, config));
     }
     const health = await response.json();
     const status = await updateStatus({ apiStatus: "conectado", lastError: "" });
@@ -205,7 +241,7 @@ async function checkApiHealth() {
   } catch (error) {
     const status = await updateStatus({
       apiStatus: "erro",
-      lastError: error.message || "Falha ao consultar API"
+      lastError: describeSendFailure(error, endpoint)
     });
     return { ok: false, error: status.lastError, status };
   }

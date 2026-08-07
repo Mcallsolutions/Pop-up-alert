@@ -12,7 +12,7 @@ async function loadConfig() {
     feedback.textContent = response?.error || "Nao foi possivel carregar as opcoes";
     return;
   }
-  apiBaseUrl.value = response.config.apiBaseUrl || "http://localhost:3333";
+  apiBaseUrl.value = response.config.apiBaseUrl || "https://pop-up-alert.vercel.app";
   extensionToken.value = response.config.extensionToken || "";
 }
 

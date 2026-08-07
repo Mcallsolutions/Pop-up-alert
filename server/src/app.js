@@ -101,6 +101,36 @@ app.get("/api/debug/cors", (req, res) => {
   });
 });
 
+// Diagnostico de ingestao. Responde so contagens e metadados, nunca conteudo
+// de ticket, para poder ser consultado sem login ao investigar o deploy.
+app.get("/api/debug/status", async (_req, res) => {
+  try {
+    const database = await initializeDatabase();
+    const snapshots = await database
+      .prepare(`SELECT COUNT(*) AS total, MAX(collected_at) AS ultimo FROM snapshots`)
+      .get();
+    const tickets = await database
+      .prepare(`SELECT COUNT(*) AS total, MAX(collected_at) AS ultimo FROM tickets`)
+      .get();
+    const porFila = await database
+      .prepare(`SELECT queue_name AS fila, COUNT(*) AS total FROM tickets GROUP BY queue_name ORDER BY COUNT(*) DESC`)
+      .all();
+
+    res.json({
+      banco: database.client,
+      extensionTokenExigido: Boolean(process.env.EXTENSION_TOKEN),
+      snapshotsRecebidos: Number(snapshots?.total || 0),
+      ultimoSnapshotEm: snapshots?.ultimo || null,
+      ticketsGravados: Number(tickets?.total || 0),
+      ultimoTicketEm: tickets?.ultimo || null,
+      ticketsPorFila: porFila.map((linha) => ({ fila: linha.fila, total: Number(linha.total || 0) })),
+      agora: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(503).json({ erro: error.message });
+  }
+});
+
 // Interface HTML de teste da API.
 // Em producao (projeto unico na Vercel) o "/" serve o painel admin,
 // por isso a interface tambem responde em "/api/console".
