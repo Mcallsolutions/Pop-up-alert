@@ -2,7 +2,7 @@ const { getDatabase } = require("../database");
 const { normalizeQueueName } = require("./queue-filter");
 const { isKnownAttendant, normalizeAttendantName } = require("./attendant-filter");
 
-function saveSnapshot(payload) {
+async function saveSnapshot(payload) {
   const snapshot = validateSnapshotPayload(payload);
   const totals = snapshot.tickets.reduce(
     (acc, ticket) => {
@@ -16,72 +16,63 @@ function saveSnapshot(payload) {
     { withTag: 0, withoutTag: 0 }
   );
 
-  const database = getDatabase();
-  const insertSnapshot = database.prepare(`
-    INSERT INTO snapshots (
-      source,
-      source_url,
-      collected_at,
-      total_tickets,
-      total_with_tag,
-      total_without_tag
-    ) VALUES (?, ?, ?, ?, ?, ?)
-  `);
-  const insertTicket = database.prepare(`
-    INSERT INTO tickets (
-      snapshot_id,
-      ticket_key,
-      client_name,
-      queue_name,
-      attendant,
-      company,
-      display_time,
-      inactivity_minutes,
-      tag,
-      tag_status,
-      source_url,
-      collected_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
+  const database = await getDatabase();
+  const snapshotId = await database.transaction(async (transaction) => {
+    const insertSnapshot = transaction.prepare(`
+      INSERT INTO snapshots (
+        source,
+        source_url,
+        collected_at,
+        total_tickets,
+        total_with_tag,
+        total_without_tag
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const insertTicket = transaction.prepare(`
+      INSERT INTO tickets (
+        snapshot_id,
+        ticket_key,
+        client_name,
+        queue_name,
+        attendant,
+        company,
+        display_time,
+        inactivity_minutes,
+        tag,
+        tag_status,
+        source_url,
+        collected_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
 
-  const persist = () => {
-    database.exec("BEGIN IMMEDIATE");
-    try {
-      const result = insertSnapshot.run(
-        snapshot.source,
+    const result = await insertSnapshot.run(
+      snapshot.source,
+      snapshot.url,
+      snapshot.collectedAt,
+      snapshot.tickets.length,
+      totals.withTag,
+      totals.withoutTag,
+      { returning: "id" }
+    );
+
+    for (const ticket of snapshot.tickets) {
+      await insertTicket.run(
+        result.lastInsertRowid,
+        ticket.ticketKey,
+        ticket.clientName,
+        ticket.queue,
+        ticket.attendant,
+        ticket.company,
+        ticket.displayTime,
+        ticket.inactivityMinutes,
+        ticket.tag,
+        ticket.tagStatus,
         snapshot.url,
-        snapshot.collectedAt,
-        snapshot.tickets.length,
-        totals.withTag,
-        totals.withoutTag
+        snapshot.collectedAt
       );
-
-      for (const ticket of snapshot.tickets) {
-        insertTicket.run(
-          result.lastInsertRowid,
-          ticket.ticketKey,
-          ticket.clientName,
-          ticket.queue,
-          ticket.attendant,
-          ticket.company,
-          ticket.displayTime,
-          ticket.inactivityMinutes,
-          ticket.tag,
-          ticket.tagStatus,
-          snapshot.url,
-          snapshot.collectedAt
-        );
-      }
-
-      database.exec("COMMIT");
-      return result.lastInsertRowid;
-    } catch (error) {
-      database.exec("ROLLBACK");
-      throw error;
     }
-  };
-
-  const snapshotId = persist();
+    return result.lastInsertRowid;
+  });
 
   return {
     id: snapshotId,

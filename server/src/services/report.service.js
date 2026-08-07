@@ -69,11 +69,11 @@ const REPORT_DEDUPE_KEY_SQL = `
   END
 `;
 
-function getSummary() {
-  const database = getDatabase();
+async function getSummary() {
+  const database = await getDatabase();
   const { where, params } = buildTicketFilters();
-  const readings = database.prepare(`SELECT COUNT(DISTINCT snapshot_id) AS totalReadings FROM tickets ${where}`).get(...params);
-  const row = database
+  const readings = await database.prepare(`SELECT COUNT(DISTINCT snapshot_id) AS "totalReadings" FROM tickets ${where}`).get(...params);
+  const row = await database
     .prepare(
       `
       WITH filtered AS (
@@ -90,11 +90,11 @@ function getSummary() {
         FROM filtered
       )
       SELECT
-        COUNT(*) AS totalTicketsProcessed,
-        SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS totalWithTag,
-        SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS totalWithoutTag,
-        SUM(CASE WHEN COALESCE(inactivity_minutes, 0) > ${INACTIVITY_THRESHOLD_MINUTES} THEN 1 ELSE 0 END) AS totalInactive,
-        MAX(collected_at) AS lastCollectedAt
+        COUNT(*) AS "totalTicketsProcessed",
+        SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS "totalWithTag",
+        SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS "totalWithoutTag",
+        SUM(CASE WHEN COALESCE(inactivity_minutes, 0) > ${INACTIVITY_THRESHOLD_MINUTES} THEN 1 ELSE 0 END) AS "totalInactive",
+        MAX(collected_at) AS "lastCollectedAt"
       FROM ranked
       WHERE rowNumber = 1
     `
@@ -116,10 +116,11 @@ function getSummary() {
   };
 }
 
-function getMissingTags(filters = {}) {
+async function getMissingTags(filters = {}) {
+  const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
   const limit = Math.min(Number(filters.limit || 500), 1000);
-  const rows = getDatabase()
+  const rows = await database
     .prepare(
       `
       WITH filtered AS (
@@ -137,16 +138,16 @@ function getMissingTags(filters = {}) {
       )
       SELECT
         id,
-        snapshot_id AS snapshotId,
-        client_name AS clientName,
+        snapshot_id AS "snapshotId",
+        client_name AS "clientName",
         queue_name AS queue,
         attendant,
         company,
-        display_time AS displayTime,
+        display_time AS "displayTime",
         tag,
-        tag_status AS tagStatus,
+        tag_status AS "tagStatus",
         source_url AS url,
-        collected_at AS collectedAt
+        collected_at AS "collectedAt"
       FROM ranked
       WHERE rowNumber = 1
         AND tag_status = 'SEM_TAG'
@@ -159,9 +160,10 @@ function getMissingTags(filters = {}) {
   return { items: rows.map(sanitizeTicketRow) };
 }
 
-function getInactivitySummary(filters = {}) {
+async function getInactivitySummary(filters = {}) {
+  const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
-  const row = getDatabase()
+  const row = await database
     .prepare(
       `
       WITH filtered AS (
@@ -178,10 +180,10 @@ function getInactivitySummary(filters = {}) {
         FROM filtered
       )
       SELECT
-        COUNT(*) AS inactiveTickets,
-        MAX(COALESCE(inactivity_minutes, 0)) AS maxInactivityMinutes,
-        AVG(COALESCE(inactivity_minutes, 0)) AS averageInactivityMinutes,
-        MAX(collected_at) AS lastCollectedAt
+        COUNT(*) AS "inactiveTickets",
+        MAX(COALESCE(inactivity_minutes, 0)) AS "maxInactivityMinutes",
+        AVG(COALESCE(inactivity_minutes, 0)) AS "averageInactivityMinutes",
+        MAX(collected_at) AS "lastCollectedAt"
       FROM ranked
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
@@ -199,10 +201,11 @@ function getInactivitySummary(filters = {}) {
   };
 }
 
-function getInactiveTickets(filters = {}) {
+async function getInactiveTickets(filters = {}) {
+  const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
   const limit = Math.min(Number(filters.limit || 500), 1000);
-  const rows = getDatabase()
+  const rows = await database
     .prepare(
       `
       WITH filtered AS (
@@ -220,17 +223,17 @@ function getInactiveTickets(filters = {}) {
       )
       SELECT
         id,
-        snapshot_id AS snapshotId,
-        client_name AS clientName,
+        snapshot_id AS "snapshotId",
+        client_name AS "clientName",
         queue_name AS queue,
         attendant,
         company,
-        display_time AS displayTime,
-        inactivity_minutes AS inactivityMinutes,
+        display_time AS "displayTime",
+        inactivity_minutes AS "inactivityMinutes",
         tag,
-        tag_status AS tagStatus,
+        tag_status AS "tagStatus",
         source_url AS url,
-        collected_at AS collectedAt
+        collected_at AS "collectedAt"
       FROM ranked
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
@@ -244,10 +247,11 @@ function getInactiveTickets(filters = {}) {
   return { items: rows.map(sanitizeTicketRow) };
 }
 
-function getInactivityByAttendant(filters = {}) {
+async function getInactivityByAttendant(filters = {}) {
+  const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
   const caseSql = buildAttendantCaseSql();
-  const rows = getDatabase()
+  const rows = await database
     .prepare(
       `
       WITH filtered AS (
@@ -272,15 +276,15 @@ function getInactivityByAttendant(filters = {}) {
       )
       SELECT
         normalizedAttendant AS attendant,
-        COUNT(*) AS inactiveTickets,
-        MAX(COALESCE(inactivity_minutes, 0)) AS maxInactivityMinutes,
-        AVG(COALESCE(inactivity_minutes, 0)) AS averageInactivityMinutes
+        COUNT(*) AS "inactiveTickets",
+        MAX(COALESCE(inactivity_minutes, 0)) AS "maxInactivityMinutes",
+        AVG(COALESCE(inactivity_minutes, 0)) AS "averageInactivityMinutes"
       FROM normalized
       WHERE normalizedAttendant <> ''
         AND COALESCE(inactivity_minutes, 0) > ?
         AND (${SANITIZED_CLIENT_KEY_SQL}) <> ''
       GROUP BY normalizedAttendant
-      ORDER BY inactiveTickets DESC, maxInactivityMinutes DESC
+      ORDER BY "inactiveTickets" DESC, "maxInactivityMinutes" DESC
     `
     )
     .all(...params, INACTIVITY_THRESHOLD_MINUTES);
@@ -288,9 +292,10 @@ function getInactivityByAttendant(filters = {}) {
   return { items: rows.map(withInactivityStats) };
 }
 
-function getInactivityByCompany(filters = {}) {
+async function getInactivityByCompany(filters = {}) {
+  const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
-  const rows = getDatabase()
+  const rows = await database
     .prepare(
       `
       WITH filtered AS (
@@ -308,15 +313,15 @@ function getInactivityByCompany(filters = {}) {
       )
       SELECT
         COALESCE(NULLIF(company, ''), 'Nao identificada') AS company,
-        COUNT(*) AS inactiveTickets,
-        MAX(COALESCE(inactivity_minutes, 0)) AS maxInactivityMinutes,
-        AVG(COALESCE(inactivity_minutes, 0)) AS averageInactivityMinutes
+        COUNT(*) AS "inactiveTickets",
+        MAX(COALESCE(inactivity_minutes, 0)) AS "maxInactivityMinutes",
+        AVG(COALESCE(inactivity_minutes, 0)) AS "averageInactivityMinutes"
       FROM ranked
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
         AND (${SANITIZED_CLIENT_KEY_SQL}) <> ''
       GROUP BY COALESCE(NULLIF(company, ''), 'Nao identificada')
-      ORDER BY inactiveTickets DESC, maxInactivityMinutes DESC
+      ORDER BY "inactiveTickets" DESC, "maxInactivityMinutes" DESC
     `
     )
     .all(...params, INACTIVITY_THRESHOLD_MINUTES);
@@ -324,10 +329,11 @@ function getInactivityByCompany(filters = {}) {
   return { items: rows.map(withInactivityStats) };
 }
 
-function getReportByAttendant(filters = {}) {
+async function getReportByAttendant(filters = {}) {
+  const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
   const caseSql = buildAttendantCaseSql();
-  const rows = getDatabase()
+  const rows = await database
     .prepare(
       `
       WITH filtered AS (
@@ -352,13 +358,13 @@ function getReportByAttendant(filters = {}) {
       )
       SELECT
         normalizedAttendant AS attendant,
-        COUNT(*) AS totalTickets,
-        SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS totalWithTag,
-        SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS totalWithoutTag
+        COUNT(*) AS "totalTickets",
+        SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS "totalWithTag",
+        SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS "totalWithoutTag"
       FROM normalized
       WHERE normalizedAttendant <> ''
       GROUP BY normalizedAttendant
-      ORDER BY totalWithoutTag DESC, totalTickets DESC
+      ORDER BY "totalWithoutTag" DESC, "totalTickets" DESC
     `
     )
     .all(...params);
@@ -366,9 +372,10 @@ function getReportByAttendant(filters = {}) {
   return { items: rows.map(withFailurePercent) };
 }
 
-function getReportByQueue(filters = {}) {
+async function getReportByQueue(filters = {}) {
+  const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
-  const rows = getDatabase()
+  const rows = await database
     .prepare(
       `
       WITH filtered AS (
@@ -386,13 +393,13 @@ function getReportByQueue(filters = {}) {
       )
       SELECT
         COALESCE(NULLIF(queue_name, ''), 'Nao identificada') AS queue,
-        COUNT(*) AS totalTickets,
-        SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS totalWithTag,
-        SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS totalWithoutTag
+        COUNT(*) AS "totalTickets",
+        SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS "totalWithTag",
+        SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS "totalWithoutTag"
       FROM ranked
       WHERE rowNumber = 1
       GROUP BY COALESCE(NULLIF(queue_name, ''), 'Nao identificada')
-      ORDER BY totalWithoutTag DESC, totalTickets DESC
+      ORDER BY "totalWithoutTag" DESC, "totalTickets" DESC
     `
     )
     .all(...params);
@@ -446,7 +453,7 @@ function addLikeFilter(conditions, params, column, value) {
   if (!cleanValue) {
     return;
   }
-  conditions.push(`${column} LIKE ?`);
+  conditions.push(`UPPER(${column}) LIKE UPPER(?)`);
   params.push(`%${cleanValue}%`);
 }
 
@@ -457,7 +464,7 @@ function addAttendantFilter(conditions, params, value) {
   }
 
   const normalized = normalizeAttendantName(cleanValue) || cleanValue;
-  conditions.push(`(attendant LIKE ? OR ${buildAttendantCaseSql()} LIKE ?)`);
+  conditions.push(`(UPPER(attendant) LIKE UPPER(?) OR UPPER(${buildAttendantCaseSql()}) LIKE UPPER(?))`);
   params.push(`%${cleanValue}%`, `%${normalized}%`);
 }
 
@@ -468,7 +475,7 @@ function addNormalizedLikeFilter(conditions, params, column, value) {
   }
 
   const normalized = normalizeComparableText(cleanValue);
-  conditions.push(`(${column} LIKE ? OR ${normalizeComparableSql(column)} LIKE ?)`);
+  conditions.push(`(UPPER(${column}) LIKE UPPER(?) OR ${normalizeComparableSql(column)} LIKE ?)`);
   params.push(`%${cleanValue}%`, `%${normalized}%`);
 }
 

@@ -15,65 +15,65 @@ const router = express.Router();
 
 router.use(authMiddleware);
 
-router.get("/summary", (_req, res, next) => {
+router.get("/summary", async (_req, res, next) => {
   try {
-    res.json(getSummary());
+    res.json(await getSummary());
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/missing-tags", (req, res, next) => {
+router.get("/missing-tags", async (req, res, next) => {
   try {
-    res.json(getMissingTags(req.query));
+    res.json(await getMissingTags(req.query));
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/inactivity/summary", (req, res, next) => {
+router.get("/inactivity/summary", async (req, res, next) => {
   try {
-    res.json(getInactivitySummary(req.query));
+    res.json(await getInactivitySummary(req.query));
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/inactivity/tickets", (req, res, next) => {
+router.get("/inactivity/tickets", async (req, res, next) => {
   try {
-    res.json(getInactiveTickets(req.query));
+    res.json(await getInactiveTickets(req.query));
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/inactivity/by-attendant", (req, res, next) => {
+router.get("/inactivity/by-attendant", async (req, res, next) => {
   try {
-    res.json(getInactivityByAttendant(req.query));
+    res.json(await getInactivityByAttendant(req.query));
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/inactivity/by-company", (req, res, next) => {
+router.get("/inactivity/by-company", async (req, res, next) => {
   try {
-    res.json(getInactivityByCompany(req.query));
+    res.json(await getInactivityByCompany(req.query));
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/by-attendant", (req, res, next) => {
+router.get("/by-attendant", async (req, res, next) => {
   try {
-    res.json(getReportByAttendant(req.query));
+    res.json(await getReportByAttendant(req.query));
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/by-queue", (req, res, next) => {
+router.get("/by-queue", async (req, res, next) => {
   try {
-    res.json(getReportByQueue(req.query));
+    res.json(await getReportByQueue(req.query));
   } catch (error) {
     next(error);
   }

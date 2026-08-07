@@ -1,11 +1,13 @@
 node_modules/
 dist/
 build/
+.vercel/
 .env
+.env.local
+.env.*.local
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-api/data/
+server/data/
 npm-debug.log*
 .DS_Store
-

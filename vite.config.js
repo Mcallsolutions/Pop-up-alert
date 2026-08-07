@@ -1,0 +1,24 @@
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+const API_TARGET = process.env.VITE_DEV_API_URL || "http://localhost:3333";
+
+// O codigo-fonte do painel fica em /admin, mas o build acontece na raiz para
+// que a Vercel publique tudo (painel + API) em um unico projeto.
+export default defineConfig({
+  root: "admin",
+  plugins: [react()],
+  build: {
+    outDir: "../dist",
+    emptyOutDir: true,
+    sourcemap: false
+  },
+  server: {
+    host: "0.0.0.0",
+    port: 5173,
+    proxy: {
+      "/api": { target: API_TARGET, changeOrigin: true },
+      "/health": { target: API_TARGET, changeOrigin: true }
+    }
+  }
+});

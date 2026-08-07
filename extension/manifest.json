@@ -20,7 +20,8 @@
   "host_permissions": [
     "https://s11.mtalk.com.br/tickets*",
     "http://localhost:3333/*",
-    "https://api.dominio.com.br/*"
+    "https://pop-up-alert.vercel.app/*",
+    "https://*.vercel.app/*"
   ],
   "background": {
     "service_worker": "src/background.js"

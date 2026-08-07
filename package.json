@@ -1,0 +1,37 @@
+{
+  "name": "mcall-ticket-tag-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monitor de TAG de tickets do MTalk: extensao Chrome, API Express e painel admin React.",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,admin -c blue,magenta \"npm:dev:api\" \"npm:dev:admin\"",
+    "dev:api": "node --watch server/src/server.js",
+    "dev:admin": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server/src/server.js",
+    "migrate": "node server/src/database/index.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.0.5"
+  }
+}

@@ -24,7 +24,15 @@ export default function SettingsPage() {
       <form className="settings-form" onSubmit={save}>
         <label>
           URL da API
-          <input value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} placeholder="http://localhost:3333" />
+          <input
+            value={apiUrl}
+            onChange={(event) => setApiUrl(event.target.value)}
+            placeholder="Deixe vazio para usar a mesma origem do painel"
+          />
+          <small>
+            Vazio = a API responde no mesmo dominio deste painel (padrao no deploy da Vercel). Preencha apenas se a API
+            estiver hospedada em outro endereco, ex.: <code>http://localhost:3333</code>.
+          </small>
         </label>
         <button className="primary-button" type="submit">
           <Save aria-hidden="true" size={17} />

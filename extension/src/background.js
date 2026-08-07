@@ -1,8 +1,10 @@
 const CONFIG_KEY = "mcall_config";
 const STATUS_KEY = "mcall_status";
 
+// Aponta para o deploy da Vercel. Para desenvolver localmente, troque no popup
+// ou nas opcoes da extensao para http://localhost:3333.
 const DEFAULT_CONFIG = {
-  apiBaseUrl: "http://localhost:3333",
+  apiBaseUrl: "https://pop-up-alert.vercel.app",
   extensionToken: ""
 };
 

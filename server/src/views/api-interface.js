@@ -373,7 +373,7 @@ function renderApiInterface() {
 function getApiCatalog() {
   return {
     service: "mcall-ticket-tag-api",
-    interface: "/",
+    interface: "/api/console",
     endpoints: [
       { method: "GET", path: "/health", auth: false, description: "Status da API" },
       { method: "POST", path: "/api/auth/login", auth: false, description: "Autentica administrador" },

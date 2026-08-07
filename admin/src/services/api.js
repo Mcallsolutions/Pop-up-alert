@@ -1,12 +1,24 @@
 const TOKEN_KEY = "mcall_admin_token";
 const API_URL_KEY = "mcall_admin_api_url";
 
+// Vazio = mesma origem do painel. E o padrao no deploy unico da Vercel,
+// onde o painel esta em "/" e a API em "/api". Em dev o Vite faz proxy.
+const DEFAULT_API_URL = import.meta.env.VITE_API_URL ?? "";
+
 export function getApiBaseUrl() {
-  return (localStorage.getItem(API_URL_KEY) || import.meta.env.VITE_API_URL || "http://localhost:3333").replace(/\/+$/, "");
+  const stored = localStorage.getItem(API_URL_KEY);
+  return String(stored ?? DEFAULT_API_URL).replace(/\/+$/, "");
 }
 
 export function setApiBaseUrl(value) {
-  localStorage.setItem(API_URL_KEY, String(value || "http://localhost:3333").replace(/\/+$/, ""));
+  const normalized = String(value || "").replace(/\/+$/, "");
+
+  if (!normalized) {
+    localStorage.removeItem(API_URL_KEY);
+    return;
+  }
+
+  localStorage.setItem(API_URL_KEY, normalized);
 }
 
 export function getStoredToken() {

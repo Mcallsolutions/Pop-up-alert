@@ -3,10 +3,10 @@ const { saveSnapshot } = require("../services/ticket.service");
 
 const router = express.Router();
 
-router.post("/snapshot", (req, res, next) => {
+router.post("/snapshot", async (req, res, next) => {
   try {
     validateExtensionToken(req);
-    const result = saveSnapshot(req.body);
+    const result = await saveSnapshot(req.body);
     res.status(201).json(result);
   } catch (error) {
     next(error);
