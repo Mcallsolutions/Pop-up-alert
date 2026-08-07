@@ -105,8 +105,11 @@ CORS_ORIGINS=chrome-extension://ID_DA_EXTENSAO
 Observacoes:
 
 - Nao defina `VITE_API_URL`. Vazio faz o painel usar a propria origem.
-- `CORS_ORIGINS` so precisa liberar a extensao. O painel esta na mesma origem, e a URL do deploy (`VERCEL_URL`) e liberada automaticamente.
-- Troque `ID_DA_EXTENSAO` pelo ID real mostrado em `chrome://extensions`.
+- `CORS_ORIGINS` so precisa liberar a extensao. Troque `ID_DA_EXTENSAO` pelo ID real mostrado em `chrome://extensions`.
+- A API sempre libera requisicoes de **mesma origem**, entao o painel funciona mesmo com `CORS_ORIGINS` vazio. Os dominios da Vercel (`VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_BRANCH_URL`) tambem entram na lista automaticamente, incluindo os deploy previews.
+- Barra final e maiusculas em `CORS_ORIGINS` sao ignoradas: `https://exemplo.vercel.app/` e `https://exemplo.vercel.app` valem a mesma coisa.
+
+Se o login retornar `Origem nao permitida pelo CORS: <origem>`, a mensagem mostra exatamente qual valor precisa entrar em `CORS_ORIGINS`.
 
 ### 4. Depois do deploy
 

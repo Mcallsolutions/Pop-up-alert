@@ -36,12 +36,7 @@ app.use(
 );
 app.use(express.json({ limit: "512kb" }));
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
-app.use(
-  cors({
-    origin: validateCorsOrigin,
-    credentials: false
-  })
-);
+app.use(cors(corsOptionsDelegate));
 app.use(
   rateLimit({
     windowMs: 60 * 1000,
@@ -111,50 +106,81 @@ async function requireDatabase(_req, _res, next) {
   }
 }
 
-function validateCorsOrigin(origin, callback) {
-  if (!origin) {
-    callback(null, true);
-    return;
-  }
+// O delegate recebe a request inteira (e nao so a origem) porque precisamos
+// comparar a origem com o proprio host da requisicao. Navegadores enviam o
+// header Origin tambem em POST de MESMA origem, entao sem essa comparacao o
+// login do painel hospedado junto com a API seria bloqueado.
+function corsOptionsDelegate(req, callback) {
+  const origin = req.headers.origin;
 
-  const allowed = String(process.env.CORS_ORIGINS || DEFAULT_CORS_ORIGINS)
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  // No deploy unico da Vercel o painel roda na mesma origem da API.
-  if (process.env.VERCEL_URL) {
-    allowed.push(`https://${process.env.VERCEL_URL}`);
-  }
-
-  if (process.env.NODE_ENV !== "production" && !allowed.includes("chrome-extension://")) {
-    allowed.push("chrome-extension://");
-  }
-
-  const isAllowed = allowed.some((entry) => matchesCorsOrigin(origin, entry));
-
-  if (isAllowed) {
-    callback(null, true);
+  if (!origin || isSameOrigin(req, origin) || isAllowedOrigin(origin)) {
+    callback(null, { origin: true, credentials: false });
     return;
   }
 
   const error = new Error(`Origem nao permitida pelo CORS: ${origin}`);
   error.statusCode = 403;
-  error.publicMessage = "Origem nao permitida pelo CORS";
-  callback(error, false);
+  error.publicMessage = `Origem nao permitida pelo CORS: ${origin}`;
+  callback(error);
+}
+
+function isSameOrigin(req, origin) {
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+
+  if (!host) {
+    return false;
+  }
+
+  const protocols = [req.headers["x-forwarded-proto"], req.protocol, "https", "http"].filter(Boolean);
+
+  return protocols.some((protocol) => normalizeOrigin(`${protocol}://${host}`) === normalizeOrigin(origin));
+}
+
+function isAllowedOrigin(origin) {
+  const configured = String(process.env.CORS_ORIGINS || DEFAULT_CORS_ORIGINS)
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  // Dominios que a Vercel injeta: URL do deploy, dominio de producao e da branch.
+  const vercelHosts = [
+    process.env.VERCEL_URL,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL,
+    process.env.VERCEL_BRANCH_URL
+  ]
+    .filter(Boolean)
+    .map((host) => `https://${host}`);
+
+  const allowed = [...configured, ...vercelHosts];
+
+  if (process.env.NODE_ENV !== "production") {
+    allowed.push("chrome-extension://");
+  }
+
+  const normalizedOrigin = normalizeOrigin(origin);
+
+  return allowed.some((entry) => matchesCorsOrigin(normalizedOrigin, entry.trim()));
+}
+
+// Origin nunca vem com barra final nem com caminho, mas a variavel de ambiente
+// costuma ser colada do navegador com "/" no fim. Normalizar evita esse erro.
+function normalizeOrigin(value) {
+  return String(value).trim().replace(/\/+$/, "").toLowerCase();
 }
 
 function matchesCorsOrigin(origin, entry) {
   if (entry.endsWith("://")) {
-    return origin.startsWith(entry);
+    return origin.startsWith(entry.toLowerCase());
   }
 
-  if (entry.includes("*")) {
-    const pattern = `^${entry.split("*").map(escapeRegex).join(".*")}$`;
+  const normalizedEntry = normalizeOrigin(entry);
+
+  if (normalizedEntry.includes("*")) {
+    const pattern = `^${normalizedEntry.split("*").map(escapeRegex).join(".*")}$`;
     return new RegExp(pattern).test(origin);
   }
 
-  return origin === entry;
+  return origin === normalizedEntry;
 }
 
 function escapeRegex(value) {
