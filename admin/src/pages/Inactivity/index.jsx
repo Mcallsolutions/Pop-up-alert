@@ -3,8 +3,9 @@ import { RefreshCw } from "lucide-react";
 import FilterBar, { emptyFilters } from "../../components/FilterBar";
 import { api } from "../../services/api";
 import { buildFileName, exportDocx, exportPdf } from "../../services/export";
+import { formatDateTime, formatMinutes, formatTicketDateTime } from "../../services/datetime";
 
-const EXPORT_HEADERS = ["Cliente", "Fila", "Atendente", "Empresa", "Horario", "Minutos sem resposta", "Coletado em", "URL"];
+const EXPORT_HEADERS = ["Cliente", "Fila", "Atendente", "Empresa", "Horario do ticket", "Minutos sem resposta", "URL"];
 
 export default function Inactivity() {
   const [filters, setFilters] = useState(emptyFilters);
@@ -59,9 +60,8 @@ export default function Inactivity() {
         ticket.queue,
         ticket.attendant || "-",
         ticket.company || "-",
-        ticket.displayTime || "-",
+        formatTicketDateTime(ticket),
         ticket.inactivityMinutes ?? "",
-        formatDate(ticket.collectedAt),
         ticket.url || ""
       ])
     };
@@ -113,7 +113,7 @@ export default function Inactivity() {
         <Metric label="Maior espera" value={formatMinutes(summary?.maxInactivityMinutes)} tone="danger" />
         <Metric label="Media de espera" value={formatMinutes(summary?.averageInactivityMinutes)} />
         <Metric label="Limite" value={`${summary?.thresholdMinutes || 15} min`} />
-        <Metric label="Ultima coleta" value={formatDate(summary?.lastCollectedAt)} compact />
+        <Metric label="Ultima coleta" value={formatDateTime(summary?.lastCollectedAt)} compact />
       </div>
 
       <section className="table-panel">
@@ -126,15 +126,14 @@ export default function Inactivity() {
                 <th>Fila</th>
                 <th>Atendente</th>
                 <th>Empresa</th>
-                <th>Horario</th>
+                <th>Horario do ticket</th>
                 <th>Sem resposta</th>
-                <th>Coleta</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="7">Carregando...</td>
+                  <td colSpan="6">Carregando...</td>
                 </tr>
               ) : tickets.length ? (
                 tickets.map((ticket) => (
@@ -143,14 +142,13 @@ export default function Inactivity() {
                     <td>{ticket.queue}</td>
                     <td>{ticket.attendant || "-"}</td>
                     <td>{ticket.company || "-"}</td>
-                    <td>{ticket.displayTime || "-"}</td>
+                    <td>{formatTicketDateTime(ticket)}</td>
                     <td>{formatMinutes(ticket.inactivityMinutes)}</td>
-                    <td>{formatDate(ticket.collectedAt)}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="7">Nenhum cliente inativo encontrado.</td>
+                  <td colSpan="6">Nenhum cliente inativo encontrado.</td>
                 </tr>
               )}
             </tbody>
@@ -224,19 +222,4 @@ function describeFilters(filters) {
     .filter(([key]) => String(filters[key] || "").trim())
     .map(([key, label]) => `${label}: ${filters[key]}`);
   return active.length ? active.join("  |  ") : "Sem filtros aplicados";
-}
-
-function formatMinutes(value) {
-  const minutes = Number(value || 0);
-  return minutes ? `${minutes} min` : "-";
-}
-
-function formatDate(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("pt-BR", {
-    dateStyle: "short",
-    timeStyle: "short"
-  }).format(date);
 }

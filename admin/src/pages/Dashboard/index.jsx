@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import FilterBar, { emptyFilters } from "../../components/FilterBar";
+import AiSummaryCard from "../../components/AiSummaryCard";
 import { api } from "../../services/api";
+import { formatDateTime } from "../../services/datetime";
 
 export default function Dashboard() {
   const [filters, setFilters] = useState(emptyFilters);
   const [summary, setSummary] = useState(null);
   const [attendants, setAttendants] = useState([]);
   const [queues, setQueues] = useState([]);
+  const [aiSummary, setAiSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -30,8 +33,19 @@ export default function Dashboard() {
     }
   }
 
+  // O resumo da IA e apenas leitura aqui: quem gera um novo e a pagina "IA".
+  // Uma falha nele nao pode derrubar o dashboard inteiro.
+  async function loadAiSummary() {
+    try {
+      setAiSummary(await api.latestAiSummary());
+    } catch (_requestError) {
+      setAiSummary(null);
+    }
+  }
+
   useEffect(() => {
     load();
+    loadAiSummary();
   }, []);
 
   function updateFilter(key, value) {
@@ -50,7 +64,14 @@ export default function Dashboard() {
           <h2>Resumo geral</h2>
           <p>Indicadores consolidados das leituras recebidas pela API.</p>
         </div>
-        <button className="secondary-button" type="button" onClick={() => load()}>
+        <button
+          className="secondary-button"
+          type="button"
+          onClick={() => {
+            load();
+            loadAiSummary();
+          }}
+        >
           <RefreshCw aria-hidden="true" size={17} />
           Atualizar
         </button>
@@ -67,8 +88,13 @@ export default function Dashboard() {
         <Metric label="Inativos +15 min" value={summary?.totalInactive || 0} tone="warning" />
         <Metric label="Conformidade" value={`${summary?.compliancePercent || 0}%`} tone="success" />
         <Metric label="Leituras recebidas" value={summary?.totalReadings || 0} />
-        <Metric label="Ultima atualizacao" value={formatDate(summary?.lastCollectedAt)} compact />
+        <Metric label="Ultima atualizacao" value={formatDateTime(summary?.lastCollectedAt)} compact />
       </div>
+
+      <AiSummaryCard
+        summary={aiSummary}
+        emptyMessage="Nenhum resumo gerado ainda. Abra a aba IA para gerar o primeiro."
+      />
 
       <div className="two-column">
         <ReportTable title="Por atendente" rows={attendants} labelKey="attendant" loading={loading} />
@@ -125,14 +151,4 @@ function ReportTable({ title, rows, labelKey, loading }) {
       </div>
     </section>
   );
-}
-
-function formatDate(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("pt-BR", {
-    dateStyle: "short",
-    timeStyle: "short"
-  }).format(date);
 }

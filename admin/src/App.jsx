@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { BarChart3, Clock, LayoutDashboard, LogOut, Settings, Tags } from "lucide-react";
+import { BarChart3, Clock, LayoutDashboard, LogOut, Settings, Sparkles, Tags } from "lucide-react";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Inactivity from "./pages/Inactivity";
 import Reports from "./pages/Reports";
+import AiPage from "./pages/AI";
 import SettingsPage from "./pages/Settings";
 import { api, getStoredToken, removeStoredToken, setStoredToken } from "./services/api";
 
@@ -11,6 +12,7 @@ const views = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "reports", label: "Relatorios", icon: BarChart3 },
   { id: "inactivity", label: "Inatividade", icon: Clock },
+  { id: "ai", label: "IA", icon: Sparkles },
   { id: "settings", label: "Configuracoes", icon: Settings }
 ];
 
@@ -33,6 +35,7 @@ export default function App() {
   const currentView = useMemo(() => {
     if (view === "reports") return <Reports />;
     if (view === "inactivity") return <Inactivity />;
+    if (view === "ai") return <AiPage />;
     if (view === "settings") return <SettingsPage />;
     return <Dashboard />;
   }, [view]);

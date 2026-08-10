@@ -3,8 +3,9 @@ import { RefreshCw } from "lucide-react";
 import FilterBar, { emptyFilters } from "../../components/FilterBar";
 import { api } from "../../services/api";
 import { buildFileName, exportDocx, exportPdf } from "../../services/export";
+import { formatMinutes, formatTicketDateTime } from "../../services/datetime";
 
-const EXPORT_HEADERS = ["Cliente", "Fila", "Atendente", "Empresa", "Horario", "Sem resposta (min)", "Coletado em", "URL"];
+const EXPORT_HEADERS = ["Cliente", "Fila", "Atendente", "Empresa", "Horario do ticket", "Sem resposta (min)", "URL"];
 
 export default function Reports() {
   const [filters, setFilters] = useState(emptyFilters);
@@ -54,9 +55,8 @@ export default function Reports() {
       ticket.queue,
       ticket.attendant || "-",
       ticket.company || "-",
-      ticket.displayTime || "-",
+      formatTicketDateTime(ticket),
       ticket.inactivityMinutes ?? "",
-      formatDate(ticket.collectedAt),
       ticket.url || ""
     ]);
   }
@@ -128,15 +128,14 @@ export default function Reports() {
                 <th>Fila</th>
                 <th>Atendente</th>
                 <th>Empresa</th>
-                <th>Horario</th>
+                <th>Horario do ticket</th>
                 <th>Sem resposta</th>
-                <th>Coleta</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="7">Carregando...</td>
+                  <td colSpan="6">Carregando...</td>
                 </tr>
               ) : tickets.length ? (
                 tickets.map((ticket) => (
@@ -145,14 +144,13 @@ export default function Reports() {
                     <td>{ticket.queue}</td>
                     <td>{ticket.attendant || "-"}</td>
                     <td>{ticket.company || "-"}</td>
-                    <td>{ticket.displayTime || "-"}</td>
+                    <td>{formatTicketDateTime(ticket)}</td>
                     <td>{formatMinutes(ticket.inactivityMinutes)}</td>
-                    <td>{formatDate(ticket.collectedAt)}</td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan="7">Nenhum ticket sem TAG encontrado.</td>
+                  <td colSpan="6">Nenhum ticket sem TAG encontrado.</td>
                 </tr>
               )}
             </tbody>
@@ -217,19 +215,4 @@ function describeFilters(filters) {
     .filter(([key]) => String(filters[key] || "").trim())
     .map(([key, label]) => `${label}: ${filters[key]}`);
   return active.length ? active.join("  |  ") : "Sem filtros aplicados";
-}
-
-function formatMinutes(value) {
-  const minutes = Number(value || 0);
-  return minutes ? `${minutes} min` : "-";
-}
-
-function formatDate(value) {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("pt-BR", {
-    dateStyle: "short",
-    timeStyle: "short"
-  }).format(date);
 }

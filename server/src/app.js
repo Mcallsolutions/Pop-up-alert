@@ -9,6 +9,7 @@ const { initializeDatabase } = require("./database");
 const authRoutes = require("./routes/auth.routes");
 const { publicRoutes: ticketPublicRoutes, dataRoutes: ticketDataRoutes } = require("./routes/tickets.routes");
 const reportRoutes = require("./routes/reports.routes");
+const aiRoutes = require("./routes/ai.routes");
 const { renderApiInterface, getApiCatalog } = require("./views/api-interface");
 
 const DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://localhost:8080,chrome-extension://";
@@ -143,6 +144,7 @@ app.use("/api/auth", requireDatabase, authRoutes);
 app.use("/api/tickets", ticketPublicRoutes);
 app.use("/api/tickets", requireDatabase, ticketDataRoutes);
 app.use("/api/reports", requireDatabase, reportRoutes);
+app.use("/api/ai", requireDatabase, aiRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Rota nao encontrada" });

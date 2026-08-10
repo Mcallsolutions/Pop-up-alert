@@ -45,7 +45,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -121,7 +123,9 @@ label {
   font-weight: 700;
 }
 
-input {
+input,
+select,
+textarea {
   min-height: 40px;
   width: 100%;
   border: 1px solid var(--border-light);
@@ -132,10 +136,28 @@ input {
   transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
 }
 
-input:focus {
+textarea {
+  min-height: 120px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+select option {
+  background: var(--bg-3);
+  color: var(--text-1);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
   border-color: var(--green-border-strong);
   outline: 3px solid var(--green-glow);
   background: rgba(10, 22, 40, 0.92);
+}
+
+label small {
+  color: var(--text-3);
+  font-weight: 600;
 }
 
 .primary-button,
@@ -437,6 +459,202 @@ tbody tr:hover {
   display: grid;
   gap: 14px;
   padding: 18px;
+}
+
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--green);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.link-button:hover {
+  color: var(--text-1);
+}
+
+.link-button.danger {
+  color: #93c5fd;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-light);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.badge.ativo,
+.badge.risco-baixo {
+  color: var(--green);
+  border-color: var(--green-border);
+  background: var(--green-glow);
+}
+
+.badge.risco-medio {
+  color: #facc15;
+  border-color: rgba(250, 204, 21, 0.3);
+  background: rgba(250, 204, 21, 0.1);
+}
+
+.badge.risco-alto {
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.35);
+  background: var(--blue-glow);
+}
+
+.ai-summary h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-summary h3 svg {
+  color: var(--green);
+}
+
+.ai-summary-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px 18px;
+}
+
+.ai-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ai-text {
+  margin: 0;
+  color: var(--text-1);
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.ai-empty {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.ai-block h4 {
+  margin: 0 0 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.ai-block ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 5px;
+  color: var(--text-1);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ai-json {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(3, 9, 18, 0.8);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.prompt-form {
+  width: min(760px, 100%);
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-1);
+}
+
+.checkbox-field input {
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  accent-color: var(--green);
+}
+
+.prompt-list {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px 18px;
+}
+
+.prompt-item {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 9, 18, 0.45);
+}
+
+.prompt-item.inactive {
+  opacity: 0.6;
+}
+
+.prompt-item header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.prompt-item header > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.prompt-item strong {
+  color: var(--text-1);
+  font-size: 14px;
+}
+
+.prompt-actions {
+  gap: 14px;
+}
+
+.prompt-item p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.prompt-item small {
+  color: var(--text-3);
+  font-size: 11px;
 }
 
 @media (max-width: 1100px) {

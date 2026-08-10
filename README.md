@@ -100,11 +100,14 @@ ADMIN_NAME=Administrador
 ADMIN_PASSWORD=troque-por-uma-senha-forte
 EXTENSION_TOKEN=troque-por-um-token-longo-e-aleatorio
 CORS_ORIGINS=chrome-extension://ID_DA_EXTENSAO
+OPENAI_API_KEY=sk-troque-pela-chave-real
+OPENAI_MODEL=gpt-4o-mini
 ```
 
 Observacoes:
 
 - Nao defina `VITE_API_URL`. Vazio faz o painel usar a propria origem.
+- `OPENAI_API_KEY` e opcional: sem ela o painel funciona normalmente e apenas a aba **IA** fica sem gerar resumos. A chave e usada **so no servidor** — o navegador nunca a recebe.
 - `CORS_ORIGINS` so precisa liberar a extensao. Troque `ID_DA_EXTENSAO` pelo ID real mostrado em `chrome://extensions`.
 - A API sempre libera requisicoes de **mesma origem**, entao o painel funciona mesmo com `CORS_ORIGINS` vazio. Os dominios da Vercel (`VERCEL_URL`, `VERCEL_PROJECT_PRODUCTION_URL`, `VERCEL_BRANCH_URL`) tambem entram na lista automaticamente, incluindo os deploy previews.
 - Barra final e maiusculas em `CORS_ORIGINS` sao ignoradas: `https://exemplo.vercel.app/` e `https://exemplo.vercel.app` valem a mesma coisa.
@@ -215,6 +218,11 @@ Endpoints autenticados com JWT:
 - `GET /api/reports/inactivity/tickets`
 - `GET /api/reports/inactivity/by-attendant`
 - `GET /api/reports/inactivity/by-company`
+- `GET /api/ai/status`
+- `GET /api/ai/prompts` / `POST /api/ai/prompts` / `PUT /api/ai/prompts/:id` / `DELETE /api/ai/prompts/:id`
+- `POST /api/ai/summary` (gera um resumo novo chamando a OpenAI)
+- `GET /api/ai/summary/latest`
+- `GET /api/ai/summaries?limit=10`
 
 Todos os endpoints de `/api/reports` aceitam os mesmos filtros por query string:
 `day`, `startDate`, `endDate`, `attendant`, `company`, `queue`, `clientName` e `limit`.
@@ -235,6 +243,33 @@ Endpoints da extensao:
 - `POST /api/tickets/snapshot`
 
 Se `EXTENSION_TOKEN` estiver preenchido, a extensao precisa enviar o mesmo valor no header `x-extension-token`.
+
+## Aba IA (OpenAI)
+
+O painel tem uma aba **IA** com tres partes:
+
+1. **Prompts e treinamentos** — cadastro de instrucoes (`INSTRUCAO`, regra fixa que a IA segue) e exemplos (`TREINAMENTO`, referencia de estilo/criterio). Tudo que estiver **ativo** e enviado junto com os dados a cada resumo; itens inativos ficam guardados sem entrar no prompt.
+2. **Resumo da IA** — os filtros da barra definem o recorte enviado ao modelo. O botao "Gerar resumo com IA" monta o contexto com os mesmos relatorios que o painel exibe (totais, tickets sem TAG, inatividade, quebras por atendente e fila) e chama a OpenAI.
+3. **Historico** — cada resumo fica salvo com modelo, tokens, filtros e responsavel. O ultimo resumo tambem aparece como um card no Dashboard.
+
+A resposta e sempre pedida em JSON (`response_format: json_object`) no formato:
+
+```json
+{
+  "resumo": "texto",
+  "nivelRisco": "BAIXO | MEDIO | ALTO",
+  "pontosCriticos": ["..."],
+  "atendentes": [{ "nome": "...", "observacao": "..." }],
+  "filas": [{ "fila": "...", "observacao": "..." }],
+  "recomendacoes": ["..."]
+}
+```
+
+Variaveis de ambiente: `OPENAI_API_KEY` (obrigatoria para gerar), `OPENAI_MODEL` (padrao `gpt-4o-mini`), e as opcionais `OPENAI_BASE_URL`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT`, `OPENAI_TEMPERATURE`, `OPENAI_MAX_OUTPUT_TOKENS`, `OPENAI_TIMEOUT_MS` (mantenha abaixo do `maxDuration` de 30s do `vercel.json`).
+
+## Horarios no painel
+
+As tabelas de tickets mostram o **horario do ticket** (o que aparece na tela do MTalk), e nao o horario da coleta. A data e composta no navegador: dia da leitura + hora do ticket; se a hora do ticket for maior que a da coleta, o registro e do dia anterior. O horario da coleta continua visivel apenas nos indicadores "Ultima atualizacao" e "Ultima coleta", que descrevem a leitura em si.
 
 ## Banco de dados
 
@@ -264,3 +299,5 @@ Antes de publicar em VPS:
 ## Seguranca e LGPD
 
 O projeto coleta apenas dados necessarios para o relatorio de TAG: cliente, fila, atendente, conexao, horario, TAG/status, URL e data de leitura. Ele nao captura senhas, cookies ou mensagens completas. O painel usa JWT, a API aplica rate limit, valida payloads e evita logar dados sensiveis.
+
+Atencao ao usar a aba **IA**: gerar um resumo envia para a OpenAI o recorte de dados filtrado, incluindo nomes de clientes, atendentes e empresas. Use os filtros para limitar o recorte e confirme que esse envio a um provedor externo esta previsto na politica de privacidade da operacao.

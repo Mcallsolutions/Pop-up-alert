@@ -73,6 +73,30 @@ export const api = {
   },
   byQueue(filters = {}) {
     return request(`/api/reports/by-queue${toQuery(filters)}`);
+  },
+  aiStatus() {
+    return request("/api/ai/status");
+  },
+  aiPrompts() {
+    return request("/api/ai/prompts");
+  },
+  createAiPrompt(payload) {
+    return request("/api/ai/prompts", { method: "POST", body: payload });
+  },
+  updateAiPrompt(id, payload) {
+    return request(`/api/ai/prompts/${id}`, { method: "PUT", body: payload });
+  },
+  deleteAiPrompt(id) {
+    return request(`/api/ai/prompts/${id}`, { method: "DELETE" });
+  },
+  generateAiSummary(filters = {}) {
+    return request("/api/ai/summary", { method: "POST", body: filters });
+  },
+  latestAiSummary() {
+    return request("/api/ai/summary/latest");
+  },
+  aiSummaries(limit = 10) {
+    return request(`/api/ai/summaries${toQuery({ limit })}`);
   }
 };
 

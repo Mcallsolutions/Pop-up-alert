@@ -257,6 +257,14 @@ function renderApiInterface() {
             <tr><td>GET</td><td><code>/api/reports/missing-tags</code></td><td>Lista tickets sem TAG</td><td>JWT</td></tr>
             <tr><td>GET</td><td><code>/api/reports/by-attendant</code></td><td>Relatorio por atendente</td><td>JWT</td></tr>
             <tr><td>GET</td><td><code>/api/reports/by-queue</code></td><td>Relatorio por fila</td><td>JWT</td></tr>
+            <tr><td>GET</td><td><code>/api/ai/status</code></td><td>Estado da integracao com a OpenAI</td><td>JWT</td></tr>
+            <tr><td>GET</td><td><code>/api/ai/prompts</code></td><td>Lista prompts e treinamentos da IA</td><td>JWT</td></tr>
+            <tr><td>POST</td><td><code>/api/ai/prompts</code></td><td>Cadastra prompt ou treinamento</td><td>JWT</td></tr>
+            <tr><td>PUT</td><td><code>/api/ai/prompts/:id</code></td><td>Atualiza prompt ou treinamento</td><td>JWT</td></tr>
+            <tr><td>DELETE</td><td><code>/api/ai/prompts/:id</code></td><td>Remove prompt ou treinamento</td><td>JWT</td></tr>
+            <tr><td>POST</td><td><code>/api/ai/summary</code></td><td>Gera resumo em JSON com a OpenAI</td><td>JWT</td></tr>
+            <tr><td>GET</td><td><code>/api/ai/summary/latest</code></td><td>Ultimo resumo gerado pela IA</td><td>JWT</td></tr>
+            <tr><td>GET</td><td><code>/api/ai/summaries</code></td><td>Historico de resumos da IA</td><td>JWT</td></tr>
           </tbody>
         </table>
       </section>
@@ -388,7 +396,15 @@ function getApiCatalog() {
       { method: "GET", path: "/api/reports/filters", auth: "JWT", description: "Valores disponiveis para os filtros do painel" },
       { method: "GET", path: "/api/reports/missing-tags", auth: "JWT", description: "Tickets sem TAG" },
       { method: "GET", path: "/api/reports/by-attendant", auth: "JWT", description: "Relatorio por atendente" },
-      { method: "GET", path: "/api/reports/by-queue", auth: "JWT", description: "Relatorio por fila" }
+      { method: "GET", path: "/api/reports/by-queue", auth: "JWT", description: "Relatorio por fila" },
+      { method: "GET", path: "/api/ai/status", auth: "JWT", description: "Estado da integracao com a OpenAI" },
+      { method: "GET", path: "/api/ai/prompts", auth: "JWT", description: "Lista prompts e treinamentos da IA" },
+      { method: "POST", path: "/api/ai/prompts", auth: "JWT", description: "Cadastra prompt ou treinamento" },
+      { method: "PUT", path: "/api/ai/prompts/:id", auth: "JWT", description: "Atualiza prompt ou treinamento" },
+      { method: "DELETE", path: "/api/ai/prompts/:id", auth: "JWT", description: "Remove prompt ou treinamento" },
+      { method: "POST", path: "/api/ai/summary", auth: "JWT", description: "Gera resumo em JSON com a OpenAI" },
+      { method: "GET", path: "/api/ai/summary/latest", auth: "JWT", description: "Ultimo resumo gerado pela IA" },
+      { method: "GET", path: "/api/ai/summaries", auth: "JWT", description: "Historico de resumos da IA" }
     ]
   };
 }
