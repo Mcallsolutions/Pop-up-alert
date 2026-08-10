@@ -127,8 +127,8 @@ export default function AiPage() {
     <section className="page-stack">
       <div className="section-toolbar">
         <div>
-          <h2>Inteligencia artificial</h2>
-          <p>Prompts, treinamentos e resumo automatico gerado pela OpenAI a partir dos dados do painel.</p>
+          <h2>Adalberto IA</h2>
+          <p>Adalberto esta operando normalmente.</p>
         </div>
         <button className="secondary-button" type="button" onClick={load}>
           <RefreshCw aria-hidden="true" size={17} />
@@ -149,7 +149,7 @@ export default function AiPage() {
       <div className="section-toolbar">
         <div>
           <h2>Resumo da IA</h2>
-          <p>Os filtros abaixo definem o recorte de dados enviado para a IA analisar.</p>
+          <p>Os filtros abaixo definem o recorte de dados enviado para o Adalberto analisar.</p>
         </div>
       </div>
 
@@ -209,8 +209,8 @@ export default function AiPage() {
 
       <div className="section-toolbar">
         <div>
-          <h2>Prompts e treinamentos</h2>
-          <p>Tudo que estiver ativo aqui e enviado junto com os dados a cada resumo, deixando a IA mais assertiva.</p>
+          <h2>Treinamento Adalberto</h2>
+          <p>Tudo que estiver ativo aqui e enviado junto com os dados a cada resumo, deixando o Adalberto mais assertivo.</p>
         </div>
       </div>
 
