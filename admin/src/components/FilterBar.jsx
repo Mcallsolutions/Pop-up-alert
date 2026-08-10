@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useState } from "react";
-import { Download, Filter, RotateCcw } from "lucide-react";
+import { FileText, FileType2, Filter, RotateCcw } from "lucide-react";
 import { api } from "../services/api";
 
 export const emptyFilters = {
@@ -20,7 +20,15 @@ const emptyOptions = {
 // Barra unica de filtros usada pelo dashboard, relatorios e inatividade.
 // Os campos sao input + datalist: o valor vem sugerido a partir do que existe
 // no banco, mas continua aceitando busca parcial digitada a mao.
-export default function FilterBar({ filters, onChange, onApply, onClear, onExport, exportDisabled = true }) {
+export default function FilterBar({
+  filters,
+  onChange,
+  onApply,
+  onClear,
+  onExportPdf,
+  onExportDocx,
+  exportDisabled = true
+}) {
   const [options, setOptions] = useState(emptyOptions);
   const listId = useId();
 
@@ -91,10 +99,16 @@ export default function FilterBar({ filters, onChange, onApply, onClear, onExpor
           <RotateCcw aria-hidden="true" size={17} />
           Limpar
         </button>
-        {onExport ? (
-          <button className="secondary-button" type="button" onClick={onExport} disabled={exportDisabled}>
-            <Download aria-hidden="true" size={17} />
-            CSV
+        {onExportPdf ? (
+          <button className="secondary-button" type="button" onClick={onExportPdf} disabled={exportDisabled}>
+            <FileText aria-hidden="true" size={17} />
+            PDF
+          </button>
+        ) : null}
+        {onExportDocx ? (
+          <button className="secondary-button" type="button" onClick={onExportDocx} disabled={exportDisabled}>
+            <FileType2 aria-hidden="true" size={17} />
+            DOCX
           </button>
         ) : null}
       </div>

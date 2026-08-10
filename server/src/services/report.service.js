@@ -1,6 +1,11 @@
 const { getDatabase } = require("../database");
 const { getAllowedQueues } = require("./queue-filter");
-const { getKnownAttendants, isKnownAttendant, normalizeAttendantName } = require("./attendant-filter");
+const {
+  getKnownAttendants,
+  isKnownAttendant,
+  looksLikeAttendantCompanyLine,
+  normalizeAttendantName
+} = require("./attendant-filter");
 
 const INACTIVITY_THRESHOLD_MINUTES = 15;
 
@@ -35,6 +40,8 @@ const SANITIZED_CLIENT_NAME_SQL = `
       'CLIENTE NÃO IDENTIFICADO'
     ) THEN ''
     WHEN UPPER(TRIM(client_name)) LIKE 'SUPORTE-%' THEN ''
+    -- "<Atendente>0800 <EMPRESA>": identificacao do atendente, nao um atendimento.
+    WHEN UPPER(TRIM(client_name)) LIKE '%0800%' THEN ''
     WHEN UPPER(TRIM(client_name)) LIKE 'NETFIBRA%' THEN ''
     WHEN UPPER(TRIM(client_name)) LIKE 'MIX%' THEN ''
     WHEN UPPER(TRIM(client_name)) LIKE 'IDEZ%' THEN ''
@@ -563,6 +570,7 @@ function sanitizeClientName(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
   if (isKnownAttendant(text)) return "";
+  if (looksLikeAttendantCompanyLine(text)) return "";
   if (/^Suporte\s*-/i.test(text)) return "";
   if (/^(NETFIBRA|MIX|IDEZ|TERRA|PLANET)\b/i.test(text)) return "";
   if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|N[aãÃ]o identificado|Cliente n[aãÃ]o identificado)$/i.test(text)) {

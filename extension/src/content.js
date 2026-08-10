@@ -5,7 +5,7 @@
   const INACTIVITY_THRESHOLD_MINUTES = 15;
   const ALERT_SNOOZE_MS = 5 * ONE_MINUTE_MS;
   const ALERT_ROOT_ID = "mcall-ticket-tag-alert-root";
-  const PARSER_VERSION = "1.3.0";
+  const PARSER_VERSION = "1.4.0";
 
   let scanTimer = null;
   let mutationTimer = null;
@@ -40,6 +40,21 @@
   ];
   const QUEUE_PATTERN = /Suporte\s*-\s*([A-Za-z0-9_-]+)/i;
   const TIME_PATTERN = /\b([01]\d|2[0-3]):[0-5]\d\b/;
+  // Tokens de empresa/produto que aparecem colados no nome do atendente
+  // (ex.: "Luis Otavio0800 TERRANET", "Aleksandro0800 MIXTEL").
+  const COMPANY_TOKENS = [
+    ...COMPANY_PREFIXES,
+    ...ALLOWED_QUEUE_CODES,
+    "TERRANET",
+    "MIXTEL",
+    "NETFIBRA",
+    "TELECOM",
+    "FIBRA",
+    "0800"
+  ];
+  // Linha no formato "<Nome do atendente>0800 <EMPRESA>": e apenas a
+  // identificacao de quem atende, nao um atendimento/cliente.
+  const ATTENDANT_COMPANY_LINE = /^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.'\s]{2,60}?)\s*0800\b[\s\-–—_|/]*([A-Za-z0-9][A-Za-z0-9\s._&-]{0,40})?$/u;
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "FORCE_SCAN_FROM_POPUP") {
@@ -303,7 +318,7 @@
       return -100;
     }
 
-    if (looksLikeAnyQueue(text) || TIME_PATTERN.test(text) || isKnownAttendant(text)) {
+    if (looksLikeAnyQueue(text) || TIME_PATTERN.test(text) || isKnownAttendant(text) || looksLikeAttendantCompanyLine(text)) {
       return -100;
     }
 
@@ -463,6 +478,7 @@
     const text = normalizeText(value);
     if (!text) return false;
     if (isKnownAttendant(text)) return false;
+    if (looksLikeAttendantCompanyLine(text)) return false;
     if (looksLikeAnyQueue(text)) return false;
     if (getCompanyPrefix(text)) return false;
     if (matchesClientTagPattern(text)) return false;
@@ -742,6 +758,7 @@
   function looksLikeClientName(line) {
     if (!line || line.length < 4 || line.length > 100) return false;
     if (isKnownAttendant(line)) return false;
+    if (looksLikeAttendantCompanyLine(line)) return false;
     if (looksLikeAnyQueue(line)) return false;
     if (getCompanyPrefix(line)) return false;
     if (matchesClientTagPattern(line)) return false;
@@ -772,12 +789,47 @@
     for (const [attendantKey, canonical] of KNOWN_ATTENDANTS.entries()) {
       if (!key.startsWith(attendantKey)) continue;
       const suffix = key.slice(attendantKey.length).trim();
-      if (!suffix || COMPANY_PREFIXES.some((prefix) => suffix.startsWith(prefix))) {
+      if (!suffix || isCompanySuffix(suffix)) {
         return canonical;
       }
     }
 
-    return text;
+    const attendantOnly = extractAttendantFromCompanyLine(text);
+    return attendantOnly || text;
+  }
+
+  // "0800 TERRANET", "0800MIXTEL", "- MIX" etc. sao sufixos de empresa/fila
+  // colados no nome do atendente, e nao parte do nome do cliente.
+  function isCompanySuffix(value) {
+    const compact = normalizeTagText(value).replace(/[^A-Z0-9]/g, "");
+    if (!compact) return false;
+    const withoutPhone = compact.replace(/^0800/, "");
+    if (compact !== withoutPhone) return true;
+    return COMPANY_TOKENS.some((token) => withoutPhone.startsWith(token));
+  }
+
+  // Detecta o padrao "<Atendente>0800 <EMPRESA>" mesmo para atendentes que
+  // ainda nao estao na lista KNOWN_ATTENDANTS.
+  function looksLikeAttendantCompanyLine(value) {
+    return Boolean(extractAttendantFromCompanyLine(value));
+  }
+
+  function extractAttendantFromCompanyLine(value) {
+    const text = normalizeText(value);
+    const match = text.match(ATTENDANT_COMPANY_LINE);
+    if (!match) return "";
+
+    const name = normalizeText(match[1]).replace(/[-–—_|/,.]+$/g, "");
+    const company = normalizeText(match[2] || "");
+    if (!name || countWords(name) > 4 || !/[A-Za-zÀ-ÿ]{3,}/.test(name)) {
+      return "";
+    }
+    if (company && !isCompanySuffix(company)) {
+      return "";
+    }
+
+    const known = KNOWN_ATTENDANTS.get(normalizeAttendantKey(name));
+    return known || name;
   }
 
   function isKnownAttendant(value) {

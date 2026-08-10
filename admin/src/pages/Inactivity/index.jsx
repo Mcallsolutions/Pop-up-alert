@@ -2,6 +2,9 @@ import React, { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import FilterBar, { emptyFilters } from "../../components/FilterBar";
 import { api } from "../../services/api";
+import { buildFileName, exportDocx, exportPdf } from "../../services/export";
+
+const EXPORT_HEADERS = ["Cliente", "Fila", "Atendente", "Empresa", "Horario", "Minutos sem resposta", "Coletado em", "URL"];
 
 export default function Inactivity() {
   const [filters, setFilters] = useState(emptyFilters);
@@ -46,26 +49,38 @@ export default function Inactivity() {
     load(emptyFilters);
   }
 
-  function exportCsv() {
-    const headers = ["Cliente", "Fila", "Atendente", "Empresa", "Horario", "Minutos sem resposta", "Coletado em", "URL"];
-    const rows = tickets.map((ticket) => [
-      ticket.clientName,
-      ticket.queue,
-      ticket.attendant,
-      ticket.company,
-      ticket.displayTime,
-      ticket.inactivityMinutes,
-      ticket.collectedAt,
-      ticket.url
-    ]);
-    const csv = [headers, ...rows].map((row) => row.map(csvCell).join(";")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `tickets-inativos-${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+  function buildExportMeta() {
+    return {
+      title: "Clientes sem resposta",
+      subtitle: [describeFilters(filters), `Limite: ${summary?.thresholdMinutes || 15} min`].join("  |  "),
+      headers: EXPORT_HEADERS,
+      rows: tickets.map((ticket) => [
+        ticket.clientName,
+        ticket.queue,
+        ticket.attendant || "-",
+        ticket.company || "-",
+        ticket.displayTime || "-",
+        ticket.inactivityMinutes ?? "",
+        formatDate(ticket.collectedAt),
+        ticket.url || ""
+      ])
+    };
+  }
+
+  async function handleExportPdf() {
+    try {
+      await exportPdf({ ...buildExportMeta(), fileName: buildFileName("tickets-inativos", "pdf") });
+    } catch (exportError) {
+      setError(exportError.message || "Falha ao gerar o arquivo PDF");
+    }
+  }
+
+  async function handleExportDocx() {
+    try {
+      await exportDocx({ ...buildExportMeta(), fileName: buildFileName("tickets-inativos", "docx") });
+    } catch (exportError) {
+      setError(exportError.message || "Falha ao gerar o arquivo DOCX");
+    }
   }
 
   return (
@@ -86,7 +101,8 @@ export default function Inactivity() {
         onChange={updateFilter}
         onApply={load}
         onClear={clearFilters}
-        onExport={exportCsv}
+        onExportPdf={handleExportPdf}
+        onExportDocx={handleExportDocx}
         exportDisabled={!tickets.length}
       />
 
@@ -195,8 +211,19 @@ function MiniReport({ title, rows, labelKey }) {
   );
 }
 
-function csvCell(value) {
-  return `"${String(value || "").replace(/"/g, '""')}"`;
+// Resume os filtros ativos para aparecer no cabecalho do PDF/DOCX exportado.
+function describeFilters(filters) {
+  const labels = {
+    day: "Dia",
+    attendant: "Atendente",
+    company: "Empresa",
+    queue: "Fila",
+    clientName: "Cliente"
+  };
+  const active = Object.entries(labels)
+    .filter(([key]) => String(filters[key] || "").trim())
+    .map(([key, label]) => `${label}: ${filters[key]}`);
+  return active.length ? active.join("  |  ") : "Sem filtros aplicados";
 }
 
 function formatMinutes(value) {

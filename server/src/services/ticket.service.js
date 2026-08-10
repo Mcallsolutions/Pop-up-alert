@@ -1,6 +1,6 @@
 const { getDatabase } = require("../database");
 const { normalizeQueueName } = require("./queue-filter");
-const { isKnownAttendant, normalizeAttendantName } = require("./attendant-filter");
+const { isKnownAttendant, looksLikeAttendantCompanyLine, normalizeAttendantName } = require("./attendant-filter");
 
 async function saveSnapshot(payload) {
   const snapshot = validateSnapshotPayload(payload);
@@ -171,6 +171,7 @@ function cleanClientName(value) {
   const text = cleanText(value, 160);
   if (!text) return "";
   if (isKnownAttendant(text)) return "";
+  if (looksLikeAttendantCompanyLine(text)) return "";
   if (/^Suporte\s*-/i.test(text)) return "";
   if (/^(NETFIBRA|MIX|IDEZ|TERRA|PLANET)\b/i.test(text)) return "";
   if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|N[aãÃ]o identificado|Cliente n[aãÃ]o identificado)$/i.test(text)) {

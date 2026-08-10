@@ -8,6 +8,21 @@ const ATTENDANT_ALIASES = new Map([
   ["ALEKSANDRO", "Aleksandro"]
 ]);
 const COMPANY_PREFIXES = ["NETFIBRA", "MIX", "IDEZ", "TERRA", "PLANET"];
+// Tokens de empresa/produto que aparecem colados no nome do atendente
+// (ex.: "Luis Otavio0800 TERRANET", "Aleksandro0800 MIXTEL").
+const COMPANY_TOKENS = [
+  ...COMPANY_PREFIXES,
+  "TERRANET",
+  "MIXTEL",
+  "TELECOM",
+  "FIBRA",
+  "BDG",
+  "AIA",
+  "0800"
+];
+// Linha no formato "<Nome do atendente>0800 <EMPRESA>": e apenas a
+// identificacao de quem atende, nao um atendimento/cliente.
+const ATTENDANT_COMPANY_LINE = /^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.'\s]{2,60}?)\s*0800\b[\s\-–—_|/]*([A-Za-z0-9][A-Za-z0-9\s._&-]{0,40})?$/u;
 
 function normalizeAttendantName(value) {
   const text = cleanText(value);
@@ -27,16 +42,57 @@ function normalizeAttendantName(value) {
     }
 
     const suffix = key.slice(aliasKey.length).trim();
-    if (!suffix || COMPANY_PREFIXES.some((prefix) => suffix.startsWith(prefix))) {
+    if (!suffix || isCompanySuffix(suffix)) {
       return canonical;
     }
   }
 
-  return text;
+  return extractAttendantFromCompanyLine(text) || text;
 }
 
 function isKnownAttendant(value) {
   return normalizeAttendantName(value) !== cleanText(value) || ATTENDANT_ALIASES.has(normalizeKey(value));
+}
+
+// "0800 TERRANET", "0800MIXTEL", "- MIX" etc. sao sufixos de empresa/fila
+// colados no nome do atendente, e nao parte do nome do cliente.
+function isCompanySuffix(value) {
+  const compact = normalizeKey(value).replace(/[^A-Z0-9]/g, "");
+  if (!compact) {
+    return false;
+  }
+
+  const withoutPhone = compact.replace(/^0800/, "");
+  if (compact !== withoutPhone) {
+    return true;
+  }
+
+  return COMPANY_TOKENS.some((token) => withoutPhone.startsWith(token));
+}
+
+// Detecta o padrao "<Atendente>0800 <EMPRESA>" mesmo para atendentes que
+// ainda nao estao na lista de aliases.
+function looksLikeAttendantCompanyLine(value) {
+  return Boolean(extractAttendantFromCompanyLine(value));
+}
+
+function extractAttendantFromCompanyLine(value) {
+  const text = cleanText(value);
+  const match = text.match(ATTENDANT_COMPANY_LINE);
+  if (!match) {
+    return "";
+  }
+
+  const name = cleanText(match[1]).replace(/[-–—_|/,.]+$/g, "");
+  const company = cleanText(match[2]);
+  if (!name || name.split(/\s+/).filter(Boolean).length > 4 || !/[A-Za-zÀ-ÿ]{3,}/.test(name)) {
+    return "";
+  }
+  if (company && !isCompanySuffix(company)) {
+    return "";
+  }
+
+  return ATTENDANT_ALIASES.get(normalizeKey(name)) || name;
 }
 
 function getKnownAttendants() {
@@ -60,5 +116,6 @@ function cleanText(value) {
 module.exports = {
   getKnownAttendants,
   isKnownAttendant,
+  looksLikeAttendantCompanyLine,
   normalizeAttendantName
 };
