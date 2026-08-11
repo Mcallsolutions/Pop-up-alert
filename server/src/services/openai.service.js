@@ -178,7 +178,6 @@ function throwAiError(statusCode, message) {
 
 module.exports = {
   createJsonCompletion,
-  getOpenAiConfig,
   getOpenAiStatus,
   isOpenAiConfigured
 };

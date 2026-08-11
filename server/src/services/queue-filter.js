@@ -23,10 +23,6 @@ function normalizeQueueName(value) {
   return `Suporte-${ALLOWED_QUEUE_LABELS[code]}`;
 }
 
-function isAllowedQueue(value) {
-  return Boolean(normalizeQueueName(value));
-}
-
 function getAllowedQueues() {
   return Array.from(ALLOWED_QUEUE_CODES).map((code) => `Suporte-${ALLOWED_QUEUE_LABELS[code]}`);
 }
@@ -43,6 +39,5 @@ function cleanText(value) {
 
 module.exports = {
   getAllowedQueues,
-  isAllowedQueue,
   normalizeQueueName
 };

@@ -1,5 +1,3 @@
-const fs = require("fs");
-const path = require("path");
 const bcrypt = require("bcryptjs");
 
 let initializationPromise;
@@ -10,10 +8,11 @@ async function getDatabase() {
 
 async function initializeDatabase() {
   if (!initializationPromise) {
-    initializationPromise = createDatabase()
-      .then(async (createdDatabase) => {
-        await createdDatabase.initialize();
-        return createdDatabase;
+    initializationPromise = Promise.resolve()
+      .then(async () => {
+        const database = createPostgresDatabase();
+        await database.initialize();
+        return database;
       })
       .catch((error) => {
         initializationPromise = undefined;
@@ -24,91 +23,8 @@ async function initializeDatabase() {
   return initializationPromise;
 }
 
-async function createDatabase() {
-  const client = getDatabaseClient();
-
-  if (client === "sqlite") {
-    if (isServerless()) {
-      throw new Error(
-        "SQLite nao funciona em ambiente serverless (o disco e efemero e somente leitura). " +
-          "Configure DATABASE_URL/POSTGRES_URL com um PostgreSQL e DATABASE_CLIENT=postgres."
-      );
-    }
-
-    return createSqliteDatabase();
-  }
-
-  if (client === "postgres" || client === "postgresql") {
-    return createPostgresDatabase();
-  }
-
-  throw new Error(`DATABASE_CLIENT invalido: ${client}`);
-}
-
-function getDatabaseClient() {
-  // Se existe uma URL de Postgres, ela sempre vence: e o caso da Vercel, que
-  // injeta POSTGRES_URL/DATABASE_URL automaticamente pela integracao do banco.
-  if (getPostgresUrl()) {
-    return "postgres";
-  }
-
-  return String(process.env.DATABASE_CLIENT || "sqlite")
-    .trim()
-    .toLowerCase();
-}
-
 function isServerless() {
   return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-}
-
-function createSqliteDatabase() {
-  const { DatabaseSync } = require("node:sqlite");
-  // Padrao: <raiz-do-projeto>/server/data/mcall.sqlite, independente do cwd.
-  const defaultFile = path.join(__dirname, "..", "..", "data", "mcall.sqlite");
-  const databaseFile = process.env.SQLITE_DATABASE
-    ? path.resolve(process.cwd(), process.env.SQLITE_DATABASE)
-    : defaultFile;
-  fs.mkdirSync(path.dirname(databaseFile), { recursive: true });
-
-  const sqlite = new DatabaseSync(databaseFile);
-
-  return {
-    client: "sqlite",
-    async initialize() {
-      sqlite.exec("PRAGMA journal_mode = WAL");
-      sqlite.exec("PRAGMA foreign_keys = ON");
-      runSqliteMigrations(sqlite);
-      await seedAdmin(this);
-    },
-    prepare(sql) {
-      const statement = sqlite.prepare(sql);
-      return {
-        async get(...args) {
-          return statement.get(...splitArgs(args).params);
-        },
-        async all(...args) {
-          return statement.all(...splitArgs(args).params);
-        },
-        async run(...args) {
-          return statement.run(...splitArgs(args).params);
-        }
-      };
-    },
-    async exec(sql) {
-      sqlite.exec(sql);
-    },
-    async transaction(callback) {
-      sqlite.exec("BEGIN IMMEDIATE");
-      try {
-        const result = await callback(this);
-        sqlite.exec("COMMIT");
-        return result;
-      } catch (error) {
-        sqlite.exec("ROLLBACK");
-        throw error;
-      }
-    }
-  };
 }
 
 function createPostgresDatabase() {
@@ -116,7 +32,10 @@ function createPostgresDatabase() {
   const connectionString = getPostgresUrl();
 
   if (!connectionString) {
-    throw new Error("DATABASE_URL ou POSTGRES_URL precisa ser configurado para PostgreSQL.");
+    throw new Error(
+      "DATABASE_URL ou POSTGRES_URL precisa ser configurado. Na Vercel, conecte um Postgres em Storage; " +
+        "no ambiente local, aponte para um Postgres proprio."
+    );
   }
 
   const pool = new Pool({
@@ -136,7 +55,7 @@ function createPostgresDatabase() {
   const createQueryableDatabase = (queryable) => ({
     client: "postgres",
     async initialize() {
-      await runPostgresMigrations(this);
+      await runMigrations(this);
       await seedAdmin(this);
     },
     prepare(sql) {
@@ -187,57 +106,22 @@ function createPostgresDatabase() {
   return createQueryableDatabase(pool);
 }
 
-function runSqliteMigrations(sqlite) {
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      filename TEXT PRIMARY KEY,
-      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  const migrationsDir = path.join(__dirname, "migrations");
-  const files = fs
-    .readdirSync(migrationsDir)
-    .filter((file) => file.endsWith(".sql"))
-    .sort();
-
-  const hasMigration = sqlite.prepare("SELECT 1 AS found FROM schema_migrations WHERE filename = ?");
-  const insertMigration = sqlite.prepare("INSERT INTO schema_migrations (filename) VALUES (?)");
-
-  for (const file of files) {
-    if (hasMigration.get(file)) {
-      continue;
-    }
-
-    const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
-    try {
-      sqlite.exec("BEGIN IMMEDIATE");
-      sqlite.exec(sql);
-      insertMigration.run(file);
-      sqlite.exec("COMMIT");
-    } catch (error) {
-      sqlite.exec("ROLLBACK");
-      throw error;
-    }
-  }
-}
-
-async function runPostgresMigrations(postgres) {
-  await postgres.exec(`
+async function runMigrations(database) {
+  await database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       filename TEXT PRIMARY KEY,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
-  const hasMigration = postgres.prepare("SELECT 1 AS found FROM schema_migrations WHERE filename = ?");
+  const hasMigration = database.prepare("SELECT 1 AS found FROM schema_migrations WHERE filename = ?");
 
-  for (const [filename, sql] of Object.entries(POSTGRES_MIGRATIONS)) {
+  for (const [filename, sql] of Object.entries(MIGRATIONS)) {
     if (await hasMigration.get(filename)) {
       continue;
     }
 
-    await postgres.transaction(async (transaction) => {
+    await database.transaction(async (transaction) => {
       await transaction.exec(sql);
       await transaction.prepare("INSERT INTO schema_migrations (filename) VALUES (?)").run(filename);
     });
@@ -292,8 +176,7 @@ function getPostgresUrl() {
 }
 
 function getPostgresSslConfig(connectionString) {
-  const sslMode = String(process.env.PGSSLMODE || "").toLowerCase();
-  if (sslMode === "disable") {
+  if (String(process.env.PGSSLMODE || "").toLowerCase() === "disable") {
     return false;
   }
 
@@ -320,6 +203,8 @@ function isRunOptions(value) {
   );
 }
 
+// As consultas sao escritas com "?" e convertidas para os placeholders
+// numerados do PostgreSQL na hora de executar.
 function toPostgresSql(sql) {
   let parameterIndex = 0;
   return String(sql)
@@ -335,7 +220,7 @@ function addReturning(sql, returning) {
   return `${String(sql).replace(/;+\s*$/, "")} RETURNING ${returning}`;
 }
 
-const POSTGRES_MIGRATIONS = {
+const MIGRATIONS = {
   "001_init.sql": `
     CREATE TABLE IF NOT EXISTS admins (
       id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,

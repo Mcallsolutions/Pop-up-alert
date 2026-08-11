@@ -1,6 +1,6 @@
 const { getDatabase } = require("../database");
 const { normalizeQueueName } = require("./queue-filter");
-const { isKnownAttendant, looksLikeAttendantCompanyLine, normalizeAttendantName } = require("./attendant-filter");
+const { isKnownAttendant, normalizeAttendantName, sanitizeClientName } = require("./attendant-filter");
 
 async function saveSnapshot(payload) {
   const snapshot = validateSnapshotPayload(payload);
@@ -168,18 +168,7 @@ function cleanText(value, maxLength) {
 }
 
 function cleanClientName(value) {
-  const text = cleanText(value, 160);
-  if (!text) return "";
-  if (isKnownAttendant(text)) return "";
-  if (looksLikeAttendantCompanyLine(text)) return "";
-  if (/^Suporte\s*-/i.test(text)) return "";
-  if (/^(NETFIBRA|MIX|IDEZ|TERRA|PLANET)\b/i.test(text)) return "";
-  if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|N[aãÃ]o identificado|Cliente n[aãÃ]o identificado)$/i.test(text)) {
-    return "";
-  }
-  if (/[.!?]/.test(text) && calculateUppercaseRatio(text) < 0.7) return "";
-  if (/[a-z]{2,}\s+[a-z]{2,}/.test(text) && calculateUppercaseRatio(text) < 0.55) return "";
-  return text;
+  return sanitizeClientName(cleanText(value, 160));
 }
 
 function cleanAttendantName(value) {
@@ -193,13 +182,6 @@ function cleanInactivityMinutes(value) {
   const minutes = Number(value);
   if (!Number.isFinite(minutes) || minutes < 0) return null;
   return Math.min(Math.floor(minutes), 24 * 60);
-}
-
-function calculateUppercaseRatio(text) {
-  const letters = Array.from(String(text || "")).filter((char) => /[A-Za-z]/.test(char));
-  if (!letters.length) return 0;
-  const upper = letters.filter((char) => char === char.toUpperCase() && char !== char.toLowerCase()).length;
-  return upper / letters.length;
 }
 
 function throwValidation(message) {

@@ -6,10 +6,9 @@ Extensao Chrome Manifest V3 para monitorar a tela de tickets do MTalk, identific
 
 ```text
 api/            Entrypoint da Serverless Function da Vercel (um unico arquivo)
-server/         Codigo da API Node.js + Express (SQLite local / PostgreSQL em producao)
+server/         Codigo da API Node.js + Express (PostgreSQL)
 admin/          Codigo-fonte do painel web React + Vite
 extension/      Extensao Chrome MV3
-docker/         Dockerfiles, compose e Nginx (deploy alternativo em VPS)
 package.json    Dependencias unicas do projeto (API + painel)
 vite.config.js  Build do painel (root em admin/, saida em dist/)
 vercel.json     Rotas e build do projeto unico na Vercel
@@ -26,7 +25,6 @@ Um unico projeto Vercel publica tudo no mesmo dominio:
 | `/` | Painel admin (arquivos estaticos gerados em `dist/`) |
 | `/api/*` | API Express, via Serverless Function `api/index.js` |
 | `/health` | Healthcheck da API |
-| `/api/console` | Interface HTML de teste da API |
 
 Como painel e API dividem a mesma origem, **nao ha CORS entre eles** e o painel chama a API por caminho relativo.
 
@@ -34,11 +32,12 @@ A pasta `api/` contem apenas `index.js` de proposito: a Vercel transforma cada a
 
 ## Rodando localmente
 
-Requisito: Node.js 22.5 ou superior (a API usa o SQLite nativo do Node no ambiente local, sem dependencias com compilacao).
+Requisitos: Node.js 22.5 ou superior e um PostgreSQL acessivel (a mesma URL usada em producao serve, ou um banco local).
 
 ```bash
 npm install
 cp .env.example .env
+# preencha DATABASE_URL no .env antes de subir
 npm run dev
 ```
 
@@ -57,8 +56,6 @@ npm start           # API em modo producao
 npm run migrate     # roda as migrations e cria o admin inicial
 ```
 
-Interface de teste da API: `http://localhost:3333` (ou `/api/console` no deploy).
-
 Credenciais iniciais do painel, configuradas em `.env.example`:
 
 - Email: `admin@mcall.local`
@@ -70,7 +67,7 @@ Troque esses valores antes de usar fora de ambiente local.
 
 ### 1. Banco de dados
 
-SQLite **nao funciona** na Vercel: o disco e efemero. A API detecta o ambiente serverless e falha com mensagem explicita se nao houver Postgres configurado.
+A API so fala PostgreSQL — o disco da Vercel e efemero, entao nao existe banco em arquivo. Sem `DATABASE_URL`/`POSTGRES_URL` a API sobe e responde `/health` com `degradado`, e as rotas de dados devolvem 503 com a mensagem explicando o que falta.
 
 Na Vercel, va em **Storage -> Create Database -> Postgres (Neon)** e conecte ao projeto. As variaveis `POSTGRES_URL` e `DATABASE_URL` sao injetadas automaticamente e a API passa a usar PostgreSQL sozinha, sem precisar definir `DATABASE_CLIENT`. As migrations rodam na primeira requisicao apos o deploy.
 
@@ -126,18 +123,14 @@ Se o login retornar `Origem nao permitida pelo CORS: <origem>`, a mensagem mostr
 Dois endpoints publicos ajudam a investigar um deploy:
 
 - `GET /health` — status da API e do banco
-- `GET /api/debug/status` — quantos snapshots e tickets chegaram, quando foi o ultimo e se a API exige token
-- `GET /api/debug/cors` — o que a API recebe como origem e como decide liberar
+- `GET /api` — as rotas que aquele deploy realmente publica
 
 ### O painel nao atualiza mesmo com a extensao lendo tickets
 
 A leitura dos tickets acontece no DOM e funciona mesmo sem API. Se o painel nao mostra nada,
-o snapshot nao chegou. Abra `GET /api/debug/status`:
+o snapshot nao chegou — quase sempre por token.
 
-- `snapshotsRecebidos: 0` confirma que nenhum POST foi gravado
-- `extensionTokenExigido: true` significa que `EXTENSION_TOKEN` esta preenchido na Vercel
-
-Nesse caso o campo **Token da extensao** no popup precisa ter exatamente o mesmo valor de
+O campo **Token da extensao** no popup precisa ter exatamente o mesmo valor de
 `EXTENSION_TOKEN`. Vazio ou diferente faz todo `POST /api/tickets/snapshot` voltar 401,
 silenciosamente, porque a leitura continua funcionando normalmente.
 
@@ -273,28 +266,7 @@ As tabelas de tickets mostram o **horario do ticket** (o que aparece na tela do 
 
 ## Banco de dados
 
-O ambiente local usa SQLite em `server/data/mcall.sqlite`, criado a partir das migrations em `server/src/database/migrations`. Em producao a API usa PostgreSQL; as migrations equivalentes rodam automaticamente na inicializacao.
-
-## Docker (VPS, alternativa a Vercel)
-
-Na raiz do projeto:
-
-```bash
-docker compose -f docker/docker-compose.yml up -d
-```
-
-Servicos:
-
-- API: `http://localhost:3333`
-- Admin: `http://localhost:8080`
-
-Antes de publicar em VPS:
-
-1. Use HTTPS no proxy reverso.
-2. Troque `JWT_SECRET`, `ADMIN_PASSWORD` e `EXTENSION_TOKEN`.
-3. Configure `CORS_ORIGINS` com o dominio real do painel.
-4. Atualize a URL da API no popup/opcoes da extensao.
-5. Ajuste `host_permissions` no `extension/manifest.json` se o dominio final for diferente.
+PostgreSQL em qualquer ambiente. As migrations ficam em `server/src/database/index.js` (constante `MIGRATIONS`) e rodam sozinhas na primeira conexao apos o deploy, controladas pela tabela `schema_migrations`. Para adicionar uma, crie uma nova chave no objeto — nunca edite uma que ja rodou.
 
 ## Seguranca e LGPD
 

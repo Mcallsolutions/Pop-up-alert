@@ -3,43 +3,24 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
-const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const { initializeDatabase } = require("./database");
 const authRoutes = require("./routes/auth.routes");
 const { publicRoutes: ticketPublicRoutes, dataRoutes: ticketDataRoutes } = require("./routes/tickets.routes");
 const reportRoutes = require("./routes/reports.routes");
 const aiRoutes = require("./routes/ai.routes");
-const { renderApiInterface, getApiCatalog } = require("./views/api-interface");
 
-const DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://localhost:8080,chrome-extension://";
-// Marcador de versao da logica de CORS. Serve para confirmar, via
-// GET /api/debug/cors, qual versao do codigo esta realmente no ar.
-const CORS_CHECK_VERSION = 3;
+const DEFAULT_CORS_ORIGINS = "http://localhost:5173,chrome-extension://";
 const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 
 const app = express();
 
-// Necessario atras do proxy da Vercel/Nginx para que o rate limit e o req.ip
+// Necessario atras do proxy da Vercel para que o rate limit e o req.ip
 // enxerguem o IP real do cliente em vez do IP do proxy.
 app.set("trust proxy", 1);
 
-app.use(
-  helmet({
-    contentSecurityPolicy: {
-      directives: {
-        "default-src": ["'self'"],
-        "script-src": ["'self'", "'unsafe-inline'"],
-        "style-src": ["'self'", "'unsafe-inline'"],
-        "connect-src": ["'self'"],
-        "img-src": ["'self'", "data:"],
-        "object-src": ["'none'"]
-      }
-    }
-  })
-);
+app.use(helmet());
 app.use(express.json({ limit: "512kb" }));
-app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
 app.use(cors(corsOptionsDelegate));
 app.use(
   rateLimit({
@@ -68,75 +49,34 @@ app.get(["/health", "/api/health"], async (_req, res) => {
   });
 });
 
+// Catalogo das rotas publicadas por este deploy. Usado para conferir, sem
+// login, se a versao no ar ja tem o endpoint que a extensao esta chamando.
 app.get("/api", (_req, res) => {
-  res.json(getApiCatalog());
-});
-
-// Diagnostico de CORS. Mostra exatamente o que a API recebe e como decide.
-// Nao expoe segredos: CORS_ORIGINS e uma lista de dominios publicos.
-app.get("/api/debug/cors", (req, res) => {
-  const origin = req.headers.origin || null;
-
   res.json({
-    corsCheckVersion: CORS_CHECK_VERSION,
-    origemRecebida: origin,
-    host: req.headers.host || null,
-    xForwardedHost: req.headers["x-forwarded-host"] || null,
-    xForwardedProto: req.headers["x-forwarded-proto"] || null,
-    reqProtocol: req.protocol,
-    decisao: origin
-      ? {
-          mesmaOrigem: isSameOrigin(req, origin),
-          naListaLiberada: isAllowedOrigin(origin),
-          permitido: isSameOrigin(req, origin) || isAllowedOrigin(origin)
-        }
-      : { permitido: true, motivo: "requisicao sem header Origin" },
-    corsOriginsBruto: process.env.CORS_ORIGINS ?? null,
-    corsOriginsInterpretado: parseConfiguredOrigins(),
-    dominiosVercel: {
-      VERCEL_URL: process.env.VERCEL_URL || null,
-      VERCEL_PROJECT_PRODUCTION_URL: process.env.VERCEL_PROJECT_PRODUCTION_URL || null,
-      VERCEL_BRANCH_URL: process.env.VERCEL_BRANCH_URL || null
-    },
-    nodeEnv: process.env.NODE_ENV || null
+    service: "mcall-ticket-tag-api",
+    endpoints: [
+      "GET /health",
+      "POST /api/auth/login",
+      "GET /api/auth/me",
+      "POST /api/tickets/ping",
+      "POST /api/tickets/snapshot",
+      "GET /api/reports/summary",
+      "GET /api/reports/filters",
+      "GET /api/reports/missing-tags",
+      "GET /api/reports/by-attendant",
+      "GET /api/reports/by-queue",
+      "GET /api/reports/inactivity/summary",
+      "GET /api/reports/inactivity/tickets",
+      "GET /api/reports/inactivity/by-attendant",
+      "GET /api/reports/inactivity/by-company",
+      "GET /api/ai/status",
+      "GET|POST /api/ai/prompts",
+      "PUT|DELETE /api/ai/prompts/:id",
+      "POST /api/ai/summary",
+      "GET /api/ai/summary/latest",
+      "GET /api/ai/summaries"
+    ]
   });
-});
-
-// Diagnostico de ingestao. Responde so contagens e metadados, nunca conteudo
-// de ticket, para poder ser consultado sem login ao investigar o deploy.
-app.get("/api/debug/status", async (_req, res) => {
-  try {
-    const database = await initializeDatabase();
-    const snapshots = await database
-      .prepare(`SELECT COUNT(*) AS total, MAX(collected_at) AS ultimo FROM snapshots`)
-      .get();
-    const tickets = await database
-      .prepare(`SELECT COUNT(*) AS total, MAX(collected_at) AS ultimo FROM tickets`)
-      .get();
-    const porFila = await database
-      .prepare(`SELECT queue_name AS fila, COUNT(*) AS total FROM tickets GROUP BY queue_name ORDER BY COUNT(*) DESC`)
-      .all();
-
-    res.json({
-      banco: database.client,
-      extensionTokenExigido: Boolean(process.env.EXTENSION_TOKEN),
-      snapshotsRecebidos: Number(snapshots?.total || 0),
-      ultimoSnapshotEm: snapshots?.ultimo || null,
-      ticketsGravados: Number(tickets?.total || 0),
-      ultimoTicketEm: tickets?.ultimo || null,
-      ticketsPorFila: porFila.map((linha) => ({ fila: linha.fila, total: Number(linha.total || 0) })),
-      agora: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(503).json({ erro: error.message });
-  }
-});
-
-// Interface HTML de teste da API.
-// Em producao (projeto unico na Vercel) o "/" serve o painel admin,
-// por isso a interface tambem responde em "/api/console".
-app.get(["/", "/api/console"], (_req, res) => {
-  res.type("html").send(renderApiInterface());
 });
 
 app.use("/api/auth", requireDatabase, authRoutes);
@@ -185,21 +125,9 @@ function corsOptionsDelegate(req, callback) {
     return;
   }
 
-  // Log detalhado para aparecer nos Runtime Logs da Vercel.
-  console.warn(
-    "[CORS] bloqueado |",
-    JSON.stringify({
-      corsCheckVersion: CORS_CHECK_VERSION,
-      origem: origin,
-      host: req.headers.host || null,
-      xForwardedHost: req.headers["x-forwarded-host"] || null,
-      listaLiberada: parseConfiguredOrigins()
-    })
-  );
-
   const error = new Error(`Origem nao permitida pelo CORS: ${origin}`);
   error.statusCode = 403;
-  error.publicMessage = `Origem nao permitida pelo CORS: ${origin} (corsCheck v${CORS_CHECK_VERSION})`;
+  error.publicMessage = `Origem nao permitida pelo CORS: ${origin}`;
   callback(error);
 }
 
@@ -225,8 +153,6 @@ function parseConfiguredOrigins() {
 }
 
 function isAllowedOrigin(origin) {
-  const configured = parseConfiguredOrigins();
-
   // Dominios que a Vercel injeta: URL do deploy, dominio de producao e da branch.
   const vercelHosts = [
     process.env.VERCEL_URL,
@@ -236,12 +162,7 @@ function isAllowedOrigin(origin) {
     .filter(Boolean)
     .map((host) => `https://${host}`);
 
-  const allowed = [...configured, ...vercelHosts];
-
-  if (process.env.NODE_ENV !== "production") {
-    allowed.push("chrome-extension://");
-  }
-
+  const allowed = [...parseConfiguredOrigins(), ...vercelHosts];
   const normalizedOrigin = normalizeOrigin(origin);
 
   return allowed.some((entry) => matchesCorsOrigin(normalizedOrigin, entry.trim()));

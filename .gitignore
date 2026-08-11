@@ -1,13 +1,15 @@
 node_modules/
 dist/
-build/
 .vercel/
 .env
 .env.local
 .env.*.local
+npm-debug.log*
+.DS_Store
+
+# Base SQLite local de versoes anteriores do projeto. A API hoje so usa
+# PostgreSQL, mas o arquivo continua no disco e nunca deve ir para o repositorio.
+server/data/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-server/data/
-npm-debug.log*
-.DS_Store

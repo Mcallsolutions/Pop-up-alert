@@ -405,7 +405,6 @@ module.exports = {
   deletePrompt,
   generateSummary,
   getLatestSummary,
-  getPrompt,
   getStatus,
   listPrompts,
   listSummaries,

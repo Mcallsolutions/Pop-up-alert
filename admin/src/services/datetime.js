@@ -16,7 +16,6 @@ const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const CLOCK_TOLERANCE_MS = 2 * 60 * 1000;
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
-const dateFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" });
 
 export function formatDateTime(value) {
   if (!value) return "-";
@@ -27,7 +26,7 @@ export function formatDateTime(value) {
 
 // Data/hora do ticket: dia em que a leitura aconteceu + hora exibida no MTalk.
 // Quando a hora do ticket e maior que a da coleta, o ticket e da vespera.
-export function resolveTicketDate(ticket) {
+function resolveTicketDate(ticket) {
   const match = String(ticket?.displayTime || "").trim().match(TIME_PATTERN);
   if (!match) return null;
 
@@ -52,22 +51,7 @@ export function formatTicketDateTime(ticket) {
   return String(ticket?.displayTime || "").trim() || "-";
 }
 
-export function formatTicketDate(ticket) {
-  const ticketDate = resolveTicketDate(ticket);
-  return ticketDate ? dateFormatter.format(ticketDate) : "-";
-}
-
-export function formatTicketTime(ticket) {
-  const ticketDate = resolveTicketDate(ticket);
-  if (ticketDate) return `${pad(ticketDate.getHours())}:${pad(ticketDate.getMinutes())}`;
-  return String(ticket?.displayTime || "").trim() || "-";
-}
-
 export function formatMinutes(value) {
   const minutes = Number(value || 0);
   return minutes ? `${minutes} min` : "-";
-}
-
-function pad(value) {
-  return String(value).padStart(2, "0");
 }

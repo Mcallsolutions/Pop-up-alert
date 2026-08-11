@@ -1,8 +1,4 @@
 .agents
-docker
 extension
-admin/dist
 server/data
 **/*.sqlite
-**/*.sqlite-shm
-**/*.sqlite-wal

@@ -3,8 +3,8 @@ const { getAllowedQueues } = require("./queue-filter");
 const {
   getKnownAttendants,
   isKnownAttendant,
-  looksLikeAttendantCompanyLine,
-  normalizeAttendantName
+  normalizeAttendantName,
+  sanitizeClientName
 } = require("./attendant-filter");
 
 const INACTIVITY_THRESHOLD_MINUTES = 15;
@@ -425,17 +425,13 @@ async function getReportByQueue(filters = {}) {
   return { items: rows.map(withFailurePercent) };
 }
 
-function buildTicketFilters(filters = {}, initialWhere = "") {
+function buildTicketFilters(filters = {}) {
   const conditions = [];
   const params = [];
   const allowedQueues = getAllowedQueues();
 
   conditions.push(`queue_name IN (${allowedQueues.map(() => "?").join(", ")})`);
   params.push(...allowedQueues);
-
-  if (initialWhere) {
-    conditions.push(initialWhere.replace(/^WHERE\s+/i, ""));
-  }
 
   const day = normalizeDateOnly(filters.day);
   if (day) {
@@ -460,8 +456,9 @@ function buildTicketFilters(filters = {}, initialWhere = "") {
   addNormalizedLikeFilter(conditions, params, "company", filters.company);
   addLikeFilter(conditions, params, "client_name", filters.clientName);
 
+  // Sempre ha ao menos o recorte de filas monitoradas.
   return {
-    where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
+    where: `WHERE ${conditions.join(" AND ")}`,
     params
   };
 }
@@ -566,32 +563,10 @@ function escapeSqlLiteral(value) {
   return String(value || "").replace(/'/g, "''");
 }
 
-function sanitizeClientName(value) {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
-  if (!text) return "";
-  if (isKnownAttendant(text)) return "";
-  if (looksLikeAttendantCompanyLine(text)) return "";
-  if (/^Suporte\s*-/i.test(text)) return "";
-  if (/^(NETFIBRA|MIX|IDEZ|TERRA|PLANET)\b/i.test(text)) return "";
-  if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|N[aãÃ]o identificado|Cliente n[aãÃ]o identificado)$/i.test(text)) {
-    return "";
-  }
-  if (/[.!?]/.test(text) && calculateUppercaseRatio(text) < 0.7) return "";
-  if (/[a-z]{2,}\s+[a-z]{2,}/.test(text) && calculateUppercaseRatio(text) < 0.55) return "";
-  return text;
-}
-
 function sanitizeAttendantName(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text || !isKnownAttendant(text)) return "";
   return normalizeAttendantName(text);
-}
-
-function calculateUppercaseRatio(text) {
-  const letters = Array.from(String(text || "")).filter((char) => /[A-Za-z]/.test(char));
-  if (!letters.length) return 0;
-  const upper = letters.filter((char) => char === char.toUpperCase() && char !== char.toLowerCase()).length;
-  return upper / letters.length;
 }
 
 function withFailurePercent(row) {
