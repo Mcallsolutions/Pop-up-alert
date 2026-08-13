@@ -310,6 +310,19 @@ const MIGRATIONS = {
     );
 
     CREATE INDEX IF NOT EXISTS idx_ai_summaries_created_at ON ai_summaries(created_at);
+  `,
+  // Campos que so existem quando a leitura vem da API oficial do MTalk. Ficam
+  // nulos nos registros antigos, gravados pela leitura de tela.
+  "005_mtalk_api.sql": `
+    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS external_ticket_id TEXT;
+    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS ticket_uuid TEXT;
+    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS ticket_status TEXT;
+    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS last_message_at TEXT;
+    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS unread_messages INTEGER;
+    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS tags TEXT;
+
+    CREATE INDEX IF NOT EXISTS idx_tickets_external_ticket_id ON tickets(external_ticket_id);
+    CREATE INDEX IF NOT EXISTS idx_tickets_external_collected_at ON tickets(external_ticket_id, collected_at);
   `
 };
 

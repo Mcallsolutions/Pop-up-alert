@@ -110,12 +110,16 @@ function formatCaptureStatus(status = {}) {
     tickets_detectados: "Tickets detectados",
     tickets_sem_tag_detectados: "Tickets sem TAG detectados",
     nenhum_ticket_detectado: "Nenhum ticket detectado",
+    sem_sessao: "Sessao do MTalk nao encontrada",
+    erro_na_api: "Erro na API do MTalk",
     erro_na_captura: "Erro na captura"
   };
   const label = labels[status.captureStatus] || status.captureStatus || "-";
-  const selected = Number(status.selectedCount || 0);
-  const candidates = Number(status.candidateCount || 0);
-  return `${label} (${selected}/${candidates})`;
+  // Com a leitura pela API: quantos tickets vieram e quantos sao das filas
+  // monitoradas.
+  const monitored = Number(status.selectedCount || 0);
+  const received = Number(status.candidateCount || 0);
+  return `${label} (${monitored}/${received})`;
 }
 
 function sendMessage(message) {

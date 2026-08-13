@@ -74,6 +74,9 @@ export const api = {
   byQueue(filters = {}) {
     return request(`/api/reports/by-queue${toQuery(filters)}`);
   },
+  mtalkStatus() {
+    return request("/api/mtalk/status");
+  },
   aiStatus() {
     return request("/api/ai/status");
   },

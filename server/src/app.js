@@ -7,6 +7,7 @@ const rateLimit = require("express-rate-limit");
 const { initializeDatabase } = require("./database");
 const authRoutes = require("./routes/auth.routes");
 const { publicRoutes: ticketPublicRoutes, dataRoutes: ticketDataRoutes } = require("./routes/tickets.routes");
+const { dataRoutes: mtalkDataRoutes, panelRoutes: mtalkPanelRoutes } = require("./routes/mtalk.routes");
 const reportRoutes = require("./routes/reports.routes");
 const aiRoutes = require("./routes/ai.routes");
 
@@ -60,6 +61,8 @@ app.get("/api", (_req, res) => {
       "GET /api/auth/me",
       "POST /api/tickets/ping",
       "POST /api/tickets/snapshot",
+      "GET|POST /api/mtalk/collect",
+      "GET /api/mtalk/status",
       "GET /api/reports/summary",
       "GET /api/reports/filters",
       "GET /api/reports/missing-tags",
@@ -83,6 +86,7 @@ app.use("/api/auth", requireDatabase, authRoutes);
 // O ping so confere o token, entao vai antes do requireDatabase.
 app.use("/api/tickets", ticketPublicRoutes);
 app.use("/api/tickets", requireDatabase, ticketDataRoutes);
+app.use("/api/mtalk", requireDatabase, mtalkPanelRoutes, mtalkDataRoutes);
 app.use("/api/reports", requireDatabase, reportRoutes);
 app.use("/api/ai", requireDatabase, aiRoutes);
 

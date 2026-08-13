@@ -1,4 +1,5 @@
 const express = require("express");
+const { validateExtensionToken } = require("../middlewares/extension-token");
 const { saveSnapshot } = require("../services/ticket.service");
 
 // Rotas que NAO tocam o banco. Ficam separadas para poderem ser montadas fora
@@ -39,20 +40,6 @@ dataRoutes.post("/snapshot", async (req, res, next) => {
     next(error);
   }
 });
-
-function validateExtensionToken(req) {
-  const expected = process.env.EXTENSION_TOKEN;
-  if (!expected) {
-    return;
-  }
-
-  if (req.get("x-extension-token") !== expected) {
-    const error = new Error("Token da extensao invalido");
-    error.statusCode = 401;
-    error.publicMessage = "Token da extensao invalido";
-    throw error;
-  }
-}
 
 module.exports = {
   publicRoutes,

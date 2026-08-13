@@ -1,17 +1,18 @@
 # Mcall Ticket Tag Monitor
 
-Extensao Chrome Manifest V3 para monitorar a tela de tickets do MTalk, identificar tickets sem TAG de cliente e enviar snapshots para uma API. O projeto tambem inclui um painel administrativo para consulta dos relatorios.
+Extensao Chrome Manifest V3 que le os tickets do MTalk **pela API oficial**, identifica tickets sem TAG de cliente e envia snapshots para uma API. O projeto tambem inclui um painel administrativo para consulta dos relatorios.
 
 ## Estrutura
 
 ```text
-api/            Entrypoint da Serverless Function da Vercel (um unico arquivo)
-server/         Codigo da API Node.js + Express (PostgreSQL)
-admin/          Codigo-fonte do painel web React + Vite
-extension/      Extensao Chrome MV3
-package.json    Dependencias unicas do projeto (API + painel)
-vite.config.js  Build do painel (root em admin/, saida em dist/)
-vercel.json     Rotas e build do projeto unico na Vercel
+api/                Entrypoint da Serverless Function da Vercel (um unico arquivo)
+server/             Codigo da API Node.js + Express (PostgreSQL)
+admin/              Codigo-fonte do painel web React + Vite
+extension/          Extensao Chrome MV3
+Mtalk integration/  Mapeamento da API oficial do MTalk e guia da integracao
+package.json        Dependencias unicas do projeto (API + painel)
+vite.config.js      Build do painel (root em admin/, saida em dist/)
+vercel.json         Rotas e build do projeto unico na Vercel
 ```
 
 O projeto e um monorepo com **um unico `package.json` na raiz**. Nao existem mais `package.json` dentro de `api/`, `server/` ou `admin/`.
@@ -127,8 +128,8 @@ Dois endpoints publicos ajudam a investigar um deploy:
 
 ### O painel nao atualiza mesmo com a extensao lendo tickets
 
-A leitura dos tickets acontece no DOM e funciona mesmo sem API. Se o painel nao mostra nada,
-o snapshot nao chegou — quase sempre por token.
+A leitura acontece contra a API do MTalk e funciona mesmo sem a API deste projeto. Se o painel
+nao mostra nada, o snapshot nao chegou — quase sempre por token.
 
 O campo **Token da extensao** no popup precisa ter exatamente o mesmo valor de
 `EXTENSION_TOKEN`. Vazio ou diferente faz todo `POST /api/tickets/snapshot` voltar 401,
@@ -166,28 +167,25 @@ Verifique, nesta ordem:
 ### Como funciona
 
 - O content script roda apenas em `https://s11.mtalk.com.br/tickets*`.
-- A cada 1 minuto, e tambem quando a lista muda no DOM, a extensao processa os tickets visiveis.
-- A verificacao considera apenas as filas monitoradas: `Suporte-TerraNet`, `Suporte-PLANET`, `Suporte-MIX`, `Suporte-IDEZ`, `Suporte-BDG` e `Suporte-AIA`.
-- A funcao `parseTicketsFromDOM()` tenta localizar cards/list items por estrutura, textos, horarios e dimensoes visiveis.
-- A funcao `detectClientTag(ticketElement)` procura uma TAG real sem depender de cor fixa ou classe dinamica.
-- Tickets sem TAG geram um alerta visual: `Registre a TAG do cliente`.
+- A leitura vem da **API oficial do MTalk**, nao do DOM. `extension/src/mtalk-api.js` chama o backend do proprio painel usando o token da sessao ja aberta (`localStorage["token"]`), entao nao ha segredo novo para configurar nem CORS envolvido.
+- A cada 1 minuto sao **2 requisicoes**: `GET /backend/tickets?status=open` e `...?status=pending`. A lista de filas (`GET /backend/queue`) e consultada 1x a cada 10 minutos e fica em cache. Nao ha nenhuma chamada por ticket.
+- A verificacao considera apenas as filas monitoradas: `Suporte-TerraNet`, `Suporte-PLANET`, `Suporte-MIX`, `Suporte-IDEZ`, `Suporte-BDG` e `Suporte-AIA`, filtradas ja na propria consulta (`queueIds`).
+- Um ticket conta como `COM_TAG` quando tem qualquer tag registrada em `tags[]` — nao ha mais heuristica de aparencia para adivinhar o que e uma TAG.
+- A inatividade sai da diferenca real entre `updatedAt` do ticket e o horario da leitura, e nao mais de um `HH:mm` lido da tela.
+- Tickets sem TAG geram um alerta visual: `Registre a TAG do cliente`. Clicar no item abre o ticket (`/tickets/<uuid>`).
 - O service worker envia o snapshot para `POST /api/tickets/snapshot`.
 
-### Heuristica de TAG
+Detalhes da integracao, incluindo o custo de cada leitura e o mapeamento campo a campo, estao em [`Mtalk integration/README.md`](Mtalk%20integration/README.md).
 
-A extensao considera como TAG textos como:
+### Coleta pelo servidor (opcional)
 
-- `PRL - ST PLANALTO`
-- `MNI-BETEL`
-- `BDG - CIDADE VELHA`
-- `AIA - CENTRO`
-- `MIX - SETOR SUL`
+`POST /api/mtalk/collect` faz a mesma leitura direto do servidor, sem navegador aberto. Precisa de `MTALK_TOKEN` no ambiente e do mesmo `EXTENSION_TOKEN` das outras rotas de coleta (ou do `CRON_SECRET`, para Cron Job da Vercel).
 
-Ela ignora fila, atendente, empresa/conexao, icones e botoes. A deteccao combina:
+```bash
+curl -X POST "https://seu-projeto.vercel.app/api/mtalk/collect?dryRun=1" -H "x-extension-token: SEU_TOKEN"
+```
 
-- padrao textual com codigo curto + hifen;
-- texto em caixa alta ou majoritariamente caixa alta;
-- elemento visual pequeno, com padding, fundo, texto claro e aparencia de etiqueta.
+`dryRun=1` le a API e devolve o resultado sem gravar nada. O token do MTalk expira junto com a sessao do usuario que o gerou, entao esse caminho exige renovacao periodica — a extensao nao tem esse problema porque usa a sessao viva do navegador.
 
 ## API
 
@@ -235,6 +233,11 @@ Endpoints da extensao:
 - `POST /api/tickets/ping` (testa conectividade e token, nao usa o banco)
 - `POST /api/tickets/snapshot`
 
+Endpoints da integracao com o MTalk:
+
+- `GET|POST /api/mtalk/collect` (coleta pelo servidor; aceita `?dryRun=1`)
+- `GET /api/mtalk/status` (JWT; mostra a configuracao da integracao, sem expor o token)
+
 Se `EXTENSION_TOKEN` estiver preenchido, a extensao precisa enviar o mesmo valor no header `x-extension-token`.
 
 ## Aba IA (OpenAI)
@@ -264,12 +267,18 @@ Variaveis de ambiente: `OPENAI_API_KEY` (obrigatoria para gerar), `OPENAI_MODEL`
 
 As tabelas de tickets mostram o **horario do ticket** (o que aparece na tela do MTalk), e nao o horario da coleta. A data e composta no navegador: dia da leitura + hora do ticket; se a hora do ticket for maior que a da coleta, o registro e do dia anterior. O horario da coleta continua visivel apenas nos indicadores "Ultima atualizacao" e "Ultima coleta", que descrevem a leitura em si.
 
+Com a leitura pela API, cada ticket tambem grava `last_message_at` (o `updatedAt` do MTalk, em UTC), que e a origem exata do `display_time` e do calculo de inatividade.
+
 ## Banco de dados
 
 PostgreSQL em qualquer ambiente. As migrations ficam em `server/src/database/index.js` (constante `MIGRATIONS`) e rodam sozinhas na primeira conexao apos o deploy, controladas pela tabela `schema_migrations`. Para adicionar uma, crie uma nova chave no objeto — nunca edite uma que ja rodou.
 
+A migration `005_mtalk_api.sql` adiciona as colunas que so existem na leitura pela API oficial: `external_ticket_id`, `ticket_uuid`, `ticket_status`, `last_message_at`, `unread_messages` e `tags`. Registros gravados pela versao antiga ficam com esses campos nulos e continuam sendo lidos como antes.
+
 ## Seguranca e LGPD
 
-O projeto coleta apenas dados necessarios para o relatorio de TAG: cliente, fila, atendente, conexao, horario, TAG/status, URL e data de leitura. Ele nao captura senhas, cookies ou mensagens completas. O painel usa JWT, a API aplica rate limit, valida payloads e evita logar dados sensiveis.
+O projeto coleta apenas dados necessarios para o relatorio de TAG: cliente, fila, atendente, conexao, horario, TAG/status, URL e data de leitura. Com a leitura pela API oficial entram tambem os identificadores do ticket (id, uuid, status) e a contagem de mensagens nao lidas. Ele **nao le o conteudo das mensagens**: o unico endpoint consultado e a listagem de tickets (`GET /backend/tickets`), nunca `GET /backend/messages/{ticketId}`.
+
+O token da sessao do MTalk e usado apenas dentro da propria pagina do painel, no header `Authorization` das chamadas ao proprio MTalk — ele nunca e enviado para a API deste projeto nem gravado no banco. O painel usa JWT, a API aplica rate limit, valida payloads e evita logar dados sensiveis.
 
 Atencao ao usar a aba **IA**: gerar um resumo envia para a OpenAI o recorte de dados filtrado, incluindo nomes de clientes, atendentes e empresas. Use os filtros para limitar o recorte e confirme que esse envio a um provedor externo esta previsto na politica de privacidade da operacao.

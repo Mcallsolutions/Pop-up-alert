@@ -1,10 +1,19 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Save } from "lucide-react";
-import { getApiBaseUrl, setApiBaseUrl } from "../../services/api";
+import { api, getApiBaseUrl, setApiBaseUrl } from "../../services/api";
 
 export default function SettingsPage() {
   const [apiUrl, setApiUrl] = useState(getApiBaseUrl());
   const [feedback, setFeedback] = useState("");
+  const [mtalk, setMtalk] = useState(null);
+  const [mtalkError, setMtalkError] = useState("");
+
+  useEffect(() => {
+    api
+      .mtalkStatus()
+      .then(setMtalk)
+      .catch((error) => setMtalkError(error.message));
+  }, []);
 
   function save(event) {
     event.preventDefault();
@@ -41,6 +50,50 @@ export default function SettingsPage() {
       </form>
 
       {feedback ? <p className="notice success">{feedback}</p> : null}
+
+      <div className="table-panel">
+        <h3>Integracao MTalk (API oficial)</h3>
+        <div className="table-scroll">
+          {mtalkError ? (
+            <p className="notice error">{mtalkError}</p>
+          ) : !mtalk ? (
+            <p className="notice">Carregando...</p>
+          ) : (
+            <table>
+              <tbody>
+                <tr>
+                  <td>Coleta pelo servidor</td>
+                  <td>
+                    <span className={`badge${mtalk.configurado ? " ativo" : ""}`}>
+                      {mtalk.configurado ? "MTALK_TOKEN configurado" : "so pela extensao"}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>Endereco da API</td>
+                  <td>{mtalk.baseUrl}</td>
+                </tr>
+                <tr>
+                  <td>Filas monitoradas</td>
+                  <td>{(mtalk.filasMonitoradas || []).join(", ")}</td>
+                </tr>
+                <tr>
+                  <td>Status lidos</td>
+                  <td>{(mtalk.statusMonitorados || []).join(", ")}</td>
+                </tr>
+                <tr>
+                  <td>Limite de inatividade</td>
+                  <td>{mtalk.limiteInatividadeMinutos} min</td>
+                </tr>
+                <tr>
+                  <td>Filas resolvidas na ultima coleta</td>
+                  <td>{(mtalk.cacheFilas?.filas || []).join(", ") || "-"}</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
     </section>
   );
 }

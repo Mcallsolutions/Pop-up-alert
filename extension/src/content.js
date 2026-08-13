@@ -1,60 +1,26 @@
+// Monitor de tickets do MTalk.
+//
+// A leitura vem da API oficial (mtalk-api.js) — nao ha mais leitura de tela.
+// Este arquivo cuida do que sobrou: agendar as leituras, mostrar os alertas na
+// pagina e enviar o snapshot para a API do painel.
 (() => {
+  // Uma leitura por minuto. A versao que lia a tela tambem reagia a cada
+  // mudanca no DOM; com chamadas de rede isso viraria rajada de requisicao a
+  // toa, entao o intervalo fixo e a unica fonte de leituras automaticas.
   const SCAN_INTERVAL_MS = 60 * 1000;
-  const MUTATION_DEBOUNCE_MS = 1200;
   const ONE_MINUTE_MS = 60 * 1000;
-  const INACTIVITY_THRESHOLD_MINUTES = 15;
   const ALERT_SNOOZE_MS = 5 * ONE_MINUTE_MS;
   const ALERT_ROOT_ID = "mcall-ticket-tag-alert-root";
-  const PARSER_VERSION = "1.4.0";
+  const READER_VERSION = "2.0.0-api";
+
+  const api = window.McallMtalkApi;
+  const INACTIVITY_THRESHOLD_MINUTES = api?.INACTIVITY_THRESHOLD_MINUTES ?? 15;
 
   let scanTimer = null;
-  let mutationTimer = null;
-  let observer = null;
   let currentMissingTagAlertTickets = [];
   let currentInactivityAlertTickets = [];
   let alertSnoozedUntil = 0;
-  let lastCollectDiagnostics = emptyCollectDiagnostics();
-
-  const COMPANY_PREFIXES = ["NETFIBRA", "MIX", "IDEZ", "TERRA", "PLANET"];
-  const KNOWN_ATTENDANTS = new Map([
-    ["STEPHANIE", "Stephanie"],
-    ["GABRIEL OLIVEIRA", "Gabriel Oliveira"],
-    ["GABRIELL CARVALHO", "Gabriell Carvalho"],
-    ["GUILHERME GOMES", "Guilherme Gomes"],
-    ["LUIS OTAVIO", "Luis otavio"],
-    ["ALEK", "Aleksandro"],
-    ["ALEKSANDRO", "Aleksandro"]
-  ]);
-  const ALLOWED_QUEUE_CODES = new Set(["TERRANET", "PLANET", "MIX", "IDEZ", "BDG", "AIA"]);
-  const ALLOWED_QUEUE_LABELS = {
-    TERRANET: "TerraNet",
-    PLANET: "PLANET",
-    MIX: "MIX",
-    IDEZ: "IDEZ",
-    BDG: "BDG",
-    AIA: "AIA"
-  };
-  const TAG_PATTERNS = [
-    /^[A-Z0-9]{2,12}\s*[-–—]\s*[A-Z0-9][A-Z0-9\s./&()+_]{1,}$/u,
-    /^[A-Z0-9]{2,12}[-–—][A-Z0-9][A-Z0-9\s./&()+_]{1,}$/u
-  ];
-  const QUEUE_PATTERN = /Suporte\s*-\s*([A-Za-z0-9_-]+)/i;
-  const TIME_PATTERN = /\b([01]\d|2[0-3]):[0-5]\d\b/;
-  // Tokens de empresa/produto que aparecem colados no nome do atendente
-  // (ex.: "Luis Otavio0800 TERRANET", "Aleksandro0800 MIXTEL").
-  const COMPANY_TOKENS = [
-    ...COMPANY_PREFIXES,
-    ...ALLOWED_QUEUE_CODES,
-    "TERRANET",
-    "MIXTEL",
-    "NETFIBRA",
-    "TELECOM",
-    "FIBRA",
-    "0800"
-  ];
-  // Linha no formato "<Nome do atendente>0800 <EMPRESA>": e apenas a
-  // identificacao de quem atende, nao um atendimento/cliente.
-  const ATTENDANT_COMPANY_LINE = /^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.'\s]{2,60}?)\s*0800\b[\s\-–—_|/]*([A-Za-z0-9][A-Za-z0-9\s._&-]{0,40})?$/u;
+  let lastDiagnostics = {};
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "FORCE_SCAN_FROM_POPUP") {
@@ -69,50 +35,45 @@
   startMonitor();
 
   function startMonitor() {
+    if (!api) {
+      console.error("[Mcall Ticket Tag Monitor] mtalk-api.js nao carregou; a leitura pela API oficial nao esta disponivel.");
+      return;
+    }
+
     injectAlertStyles();
     scanAndSend("initial").catch(reportScanError);
     scanTimer = window.setInterval(() => {
       scanAndSend("interval").catch(reportScanError);
     }, SCAN_INTERVAL_MS);
-    observer = new MutationObserver(() => {
-      window.clearTimeout(mutationTimer);
-      mutationTimer = window.setTimeout(() => scanAndSend("mutation").catch(reportScanError), MUTATION_DEBOUNCE_MS);
-    });
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
     window.addEventListener("beforeunload", cleanup);
   }
 
   function cleanup() {
     window.clearInterval(scanTimer);
-    window.clearTimeout(mutationTimer);
-    observer?.disconnect();
   }
 
   async function scanAndSend(reason) {
-    const tickets = parseTicketsFromDOM();
+    const { tickets, diagnostics } = await api.collect();
+    lastDiagnostics = diagnostics;
+
     const missingTickets = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG");
     const inactiveTickets = tickets.filter(isInactiveTicket);
-    const diagnostics = buildDiagnostics(reason, tickets);
+    const scanDiagnostics = buildDiagnostics(reason, tickets, diagnostics);
 
     renderTicketAlerts(missingTickets, inactiveTickets, { force: reason === "manual" });
 
     const payload = {
-      source: "mtalk",
-      url: window.location.href,
+      source: "mtalk-api",
+      url: `${window.location.origin}/tickets`,
       collectedAt: toOffsetIso(new Date()),
-      diagnostics,
-      tickets: tickets.map(({ debug, ...ticket }) => ticket)
+      diagnostics: scanDiagnostics,
+      tickets
     };
 
     const response = await sendRuntimeMessage({ type: "SNAPSHOT_READY", payload });
     window.dispatchEvent(
       new CustomEvent("mcall-ticket-monitor:scan", {
-        detail: {
-          reason,
-          diagnostics,
-          tickets: payload.tickets,
-          response
-        }
+        detail: { reason, diagnostics: scanDiagnostics, tickets, response }
       })
     );
 
@@ -122,7 +83,7 @@
       missingTags: missingTickets.length,
       inactiveTickets: inactiveTickets.length,
       sent: response?.ok === true,
-      diagnostics,
+      diagnostics: scanDiagnostics,
       error: response?.error || ""
     };
   }
@@ -132,17 +93,16 @@
     sendRuntimeMessage({
       type: "SNAPSHOT_READY",
       payload: {
-        source: "mtalk",
-        url: window.location.href,
+        source: "mtalk-api",
+        url: `${window.location.origin}/tickets`,
         collectedAt: toOffsetIso(new Date()),
         diagnostics: {
-          parserVersion: PARSER_VERSION,
+          parserVersion: READER_VERSION,
           reason: "error",
-          captureStatus: "erro_na_captura",
-          parserMessage: error.message || "Erro desconhecido na captura",
+          captureStatus: error?.code === "sem_token" ? "sem_sessao" : "erro_na_api",
+          parserMessage: error?.message || "Erro desconhecido na leitura pela API",
           candidateCount: 0,
-          selectedCount: 0,
-          visibleTextLength: getVisibleText(document.body).length
+          selectedCount: 0
         },
         tickets: []
       }
@@ -161,276 +121,8 @@
     });
   }
 
-  function parseTicketsFromDOM() {
-    return collectTicketElements()
-      .map((ticketElement, index) => parseTicketElement(ticketElement, index))
-      .filter(Boolean)
-      .filter((ticket) => isAllowedQueue(ticket.queue))
-      .filter((ticket, index, tickets) => tickets.findIndex((item) => item.ticketKey === ticket.ticketKey) === index);
-  }
-
-  function collectTicketElements() {
-    const specificSelectors = [
-      '[role="listitem"]',
-      "li",
-      "article",
-      '[role="button"]',
-      '[data-testid*="ticket" i]',
-      '[aria-label*="ticket" i]',
-      '[class*="MuiListItem" i]',
-      '[class*="MuiPaper" i]',
-      '[class*="MuiButtonBase" i]',
-      '[class*="ticket" i]'
-    ];
-    const broadSelectors = ["main div", '[id*="ticket" i]', '[class*="conversation" i]', '[class*="card" i]'];
-
-    const specific = scoreCandidates(document.querySelectorAll(specificSelectors.join(",")), "specific");
-    let candidates = specific.filter((candidate) => candidate.score >= 6);
-
-    if (!candidates.length) {
-      candidates = scoreCandidates(document.querySelectorAll(broadSelectors.join(",")), "broad").filter(
-        (candidate) => candidate.score >= 7
-      );
-    }
-
-    const selected = selectBestTicketElements(candidates);
-    lastCollectDiagnostics = {
-      specificCandidateCount: specific.length,
-      candidateCount: candidates.length,
-      selectedCount: selected.length,
-      visibleTextLength: getVisibleText(document.body).length,
-      selectorMode: specific.length ? "specific" : "broad"
-    };
-
-    return selected.map((candidate) => candidate.element).slice(0, 100);
-  }
-
-  function scoreCandidates(nodeList, mode) {
-    return Array.from(new Set(Array.from(nodeList)))
-      .filter(isVisibleElement)
-      .map((element) => {
-        const text = getVisibleText(element);
-        const lines = extractLines(text);
-        const rect = element.getBoundingClientRect();
-        const area = rect.width * rect.height;
-        const hasTime = TIME_PATTERN.test(text);
-        const hasQueue = lines.some((line) => isAllowedQueue(line));
-        const hasCompany = lines.some((line) => Boolean(getCompanyPrefix(line)));
-        const hasClientName = lines.some((line) => looksLikeClientName(line));
-        const hasTag = Boolean(detectClientTag(element));
-        const tagName = element.tagName.toLowerCase();
-        const role = element.getAttribute("role") || "";
-        const className = String(element.className || "");
-        let score = 0;
-
-        if (rect.width >= 240) score += 1;
-        if (rect.height >= 42 && rect.height <= 260) score += 2;
-        if (rect.height > 260 && rect.height <= 420) score -= 1;
-        if (text.length >= 12 && text.length <= 1400) score += 1;
-        if (lines.length >= 2) score += 1;
-        if (lines.length >= 4) score += 1;
-        if (hasTime) score += 2;
-        if (hasQueue) score += 3;
-        if (hasCompany) score += 2;
-        if (hasClientName) score += 2;
-        if (hasTag) score += 1;
-        if (["li", "article"].includes(tagName)) score += 2;
-        if (role === "listitem" || role === "button") score += 2;
-        if (/MuiListItem|MuiPaper|MuiButtonBase|ticket/i.test(className)) score += 2;
-        if (mode === "specific") score += 1;
-        if (area > window.innerWidth * window.innerHeight * 0.35) score -= 5;
-        if (text.length > 1800) score -= 4;
-
-        return { element, score, rect, area, text, lines };
-      })
-      .filter((candidate) => candidate.score > 0);
-  }
-
-  function selectBestTicketElements(candidates) {
-    const selected = [];
-    const sorted = candidates.sort((a, b) => b.score - a.score || a.area - b.area || a.rect.top - b.rect.top);
-
-    for (const candidate of sorted) {
-      const overlapsExisting = selected.some((existing) => {
-        if (existing.element === candidate.element) return true;
-        if (existing.element.contains(candidate.element) || candidate.element.contains(existing.element)) return true;
-        return overlapRatio(existing.rect, candidate.rect) > 0.72;
-      });
-
-      if (!overlapsExisting) {
-        selected.push(candidate);
-      }
-    }
-
-    return selected.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
-  }
-
-  function parseTicketElement(ticketElement, index) {
-    const rawText = getVisibleText(ticketElement);
-    const lines = extractLines(rawText);
-    const tag = detectClientTag(ticketElement);
-    const displayTime = findDisplayTime(ticketElement, lines);
-    const inactivityMinutes = calculateInactivityMinutes(displayTime);
-    const queue = findFirst(lines, (line) => normalizeQueueName(line)) || "";
-    const company = findCompany(lines, tag);
-    const clientName = findClientName(lines, { tag, queue, company, displayTime });
-    const attendant = findAttendant(lines, { tag, queue, company, clientName, displayTime });
-    const tagStatus = tag ? "COM_TAG" : "SEM_TAG";
-    const ticketKey = createTicketKey({ clientName, queue, company, displayTime, tag, index, ticketElement, lines });
-
-    return {
-      ticketKey,
-      clientName,
-      queue,
-      attendant,
-      company,
-      displayTime,
-      inactivityMinutes,
-      tag,
-      tagStatus,
-      debug: {
-        lines,
-        rect: rectToPlain(ticketElement.getBoundingClientRect())
-      }
-    };
-  }
-
-  function detectClientTag(ticketElement) {
-    const elements = Array.from(ticketElement.querySelectorAll("span, div, p, small, strong, label, button, [role='button']"));
-    const scored = elements
-      .filter(isVisibleElement)
-      .map((element) => {
-        const text = normalizeText(getVisibleText(element));
-        return {
-          element,
-          text,
-          score: scoreTagCandidate(element, text)
-        };
-      })
-      .filter((candidate) => candidate.score >= 4)
-      .sort((a, b) => b.score - a.score);
-
-    return scored[0]?.text || null;
-  }
-
-  function scoreTagCandidate(element, text) {
-    if (!text || text.length < 5 || text.length > 60) {
-      return -100;
-    }
-
-    if (looksLikeAnyQueue(text) || TIME_PATTERN.test(text) || isKnownAttendant(text) || looksLikeAttendantCompanyLine(text)) {
-      return -100;
-    }
-
-    if (isPlaceholderLine(text) || /^(Atendente|Responsavel|Usuario|Cliente|Aberto|Fechado|Pendente)$/i.test(text)) {
-      return -100;
-    }
-
-    const matchesTagPattern = matchesClientTagPattern(text);
-    const uppercaseRatio = calculateUppercaseRatio(text);
-    const visualScore = scoreVisualTagStyle(element);
-    const hasTagHint = hasTagElementHint(element);
-    const tagPrefix = getTagPrefix(text);
-
-    if (["CLIENTE", "ATENDENTE", "RESPONSAVEL", "USUARIO", "FILA", "TAG", "TAGS"].includes(tagPrefix)) {
-      return -100;
-    }
-
-    if (looksLikeCompanyOnly(text) && !(matchesTagPattern && (visualScore >= 2 || hasTagHint))) {
-      return -100;
-    }
-
-    if (!matchesTagPattern && !(hasTagHint && visualScore >= 2 && countWords(text) <= 5)) {
-      return -100;
-    }
-
-    let score = 0;
-    if (matchesTagPattern) score += 4;
-    if (uppercaseRatio >= 0.75) score += 2;
-    if (visualScore >= 3) score += 3;
-    if (hasTagHint) score += 2;
-    if (/[-–—]/u.test(text)) score += 1;
-    if (element.tagName.toLowerCase() === "span") score += 1;
-
-    const rect = element.getBoundingClientRect();
-    if (rect.height > 0 && rect.height <= 32 && rect.width <= 280) {
-      score += 1;
-    }
-
-    return score;
-  }
-
-  function scoreVisualTagStyle(element) {
-    const style = window.getComputedStyle(element);
-    const rect = element.getBoundingClientRect();
-    const paddingLeft = parseFloat(style.paddingLeft) || 0;
-    const paddingRight = parseFloat(style.paddingRight) || 0;
-    const fontSize = parseFloat(style.fontSize) || 0;
-    const height = rect.height || parseFloat(style.height) || 0;
-    const display = style.display;
-    const backgroundColor = style.backgroundColor;
-    const color = style.color;
-    let score = 0;
-
-    if (display === "inline-block" || display === "inline-flex" || display === "flex") score += 1;
-    if (paddingLeft >= 3 && paddingRight >= 3) score += 1;
-    if (fontSize > 0 && fontSize <= 13) score += 1;
-    if (height >= 14 && height <= 32) score += 1;
-    if (backgroundColor && !/rgba?\(0,\s*0,\s*0,\s*0\)|transparent/i.test(backgroundColor)) score += 1;
-    if (isLightColor(color)) score += 1;
-
-    return score;
-  }
-
-  function matchesClientTagPattern(text) {
-    const normalized = normalizeTagText(text);
-    return TAG_PATTERNS.some((pattern) => pattern.test(normalized));
-  }
-
-  function getTagPrefix(text) {
-    return normalizeTagText(text).split(/[-–—]/u)[0]?.trim() || "";
-  }
-
-  function normalizeTagText(value) {
-    return normalizeText(value)
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toUpperCase();
-  }
-
-  function hasTagElementHint(element) {
-    const hint = [
-      element.getAttribute("aria-label"),
-      element.getAttribute("data-testid"),
-      element.getAttribute("title"),
-      element.getAttribute("class"),
-      element.closest("[aria-label*='tag' i], [data-testid*='tag' i], [class*='tag' i], [class*='chip' i]")?.getAttribute("class")
-    ]
-      .filter(Boolean)
-      .join(" ");
-    return /\b(tag|tags|chip)\b/i.test(hint);
-  }
-
-  function looksLikeCompanyOnly(text) {
-    const normalized = normalizeTagText(text);
-    const prefix = COMPANY_PREFIXES.find(
-      (companyPrefix) =>
-        normalized === companyPrefix || normalized.startsWith(`${companyPrefix} `) || normalized.startsWith(`${companyPrefix}-`)
-    );
-    if (!prefix) {
-      return false;
-    }
-
-    const suffix = normalized.slice(prefix.length).replace(/^[-\s_]+/, "");
-    return !suffix || ALLOWED_QUEUE_CODES.has(normalizeQueueCode(suffix));
-  }
-
-  function showMissingTagAlert(ticket) {
-    if (!isAlertableTicket(ticket)) {
-      return;
-    }
-
-    renderTicketAlerts([ticket], currentInactivityAlertTickets, { force: true });
+  function isInactiveTicket(ticket) {
+    return Number(ticket?.inactivityMinutes || 0) > INACTIVITY_THRESHOLD_MINUTES;
   }
 
   function renderTicketAlerts(missingTagTickets, inactiveTickets, options = {}) {
@@ -443,12 +135,8 @@
       return;
     }
 
-    currentMissingTagAlertTickets = getUniqueAlertTickets(missingTagTickets.filter(isAlertableTicket))
-      .map((ticket) => ({ ...ticket, alertedAt: now }))
-      .slice(0, 6);
-    currentInactivityAlertTickets = getUniqueAlertTickets(inactiveTickets.filter(isAlertableTicket))
-      .map((ticket) => ({ ...ticket, alertedAt: now }))
-      .slice(0, 6);
+    currentMissingTagAlertTickets = missingTagTickets.filter(isAlertableTicket).slice(0, 6);
+    currentInactivityAlertTickets = inactiveTickets.filter(isAlertableTicket).slice(0, 6);
 
     if (!currentMissingTagAlertTickets.length && !currentInactivityAlertTickets.length) {
       document.getElementById(ALERT_ROOT_ID)?.remove();
@@ -458,46 +146,10 @@
     renderAlert();
   }
 
-  function getUniqueAlertTickets(tickets) {
-    const seen = new Set();
-    return tickets.filter((ticket) => {
-      const alertKey = createAlertTicketKey(ticket);
-      if (!alertKey || seen.has(alertKey)) {
-        return false;
-      }
-      seen.add(alertKey);
-      return true;
-    });
-  }
-
+  // O contato vem do cadastro do MTalk, entao basta ter nome para o alerta
+  // conseguir dizer de quem ele esta falando.
   function isAlertableTicket(ticket) {
-    return hasIdentifiedClient(ticket?.clientName);
-  }
-
-  function hasIdentifiedClient(value) {
-    const text = normalizeText(value);
-    if (!text) return false;
-    if (isKnownAttendant(text)) return false;
-    if (looksLikeAttendantCompanyLine(text)) return false;
-    if (looksLikeAnyQueue(text)) return false;
-    if (getCompanyPrefix(text)) return false;
-    if (matchesClientTagPattern(text)) return false;
-    if (TIME_PATTERN.test(text)) return false;
-    if (isPlaceholderLine(text)) return false;
-    return /[A-Za-z]{3,}/.test(text);
-  }
-
-  function createAlertTicketKey(ticket) {
-    if (!isAlertableTicket(ticket)) {
-      return "";
-    }
-
-    const clientName = normalizeText(ticket?.clientName).toUpperCase();
-    if (clientName) {
-      return `CLIENT|${clientName}`;
-    }
-
-    return "";
+    return Boolean(String(ticket?.clientName || "").trim());
   }
 
   function renderAlert() {
@@ -514,7 +166,8 @@
       ),
       buildAlertSection("inactivity", "Alerta de inatividade", currentInactivityAlertTickets, (ticket) => {
         const inactiveFor = Number(ticket.inactivityMinutes || 0);
-        const inactivityText = inactiveFor > 0 ? `${inactiveFor} min sem atividade` : "Mais de 15 min sem atividade";
+        const inactivityText =
+          inactiveFor > 0 ? `${inactiveFor} min sem atividade` : `Mais de ${INACTIVITY_THRESHOLD_MINUTES} min sem atividade`;
         return [inactivityText, ticket.displayTime ? `Horario ${ticket.displayTime}` : "", ticket.queue, ticket.attendant]
           .filter(Boolean)
           .join(" - ");
@@ -537,6 +190,13 @@
       currentInactivityAlertTickets = [];
       root.remove();
     });
+
+    // Cada item leva ao proprio ticket: o uuid vem junto na resposta da API.
+    root.querySelectorAll("[data-ticket-uuid]").forEach((item) => {
+      item.addEventListener("click", () => {
+        window.location.href = `${window.location.origin}/tickets/${item.dataset.ticketUuid}`;
+      });
+    });
   }
 
   function buildAlertSection(type, title, tickets, getMeta) {
@@ -548,7 +208,8 @@
       .map((ticket) => {
         const itemTitle = escapeHtml(ticket.clientName);
         const meta = escapeHtml(getMeta(ticket));
-        return `<li><strong>${itemTitle}</strong>${meta ? `<span>${meta}</span>` : ""}</li>`;
+        const uuid = ticket.ticketUuid ? ` data-ticket-uuid="${escapeHtml(ticket.ticketUuid)}"` : "";
+        return `<li${uuid}><strong>${itemTitle}</strong>${meta ? `<span>${meta}</span>` : ""}</li>`;
       })
       .join("");
 
@@ -637,6 +298,9 @@
         border-radius: 6px;
         background: #fff7f7;
       }
+      #${ALERT_ROOT_ID} li[data-ticket-uuid] {
+        cursor: pointer;
+      }
       #${ALERT_ROOT_ID} li strong {
         font-size: 13px;
         line-height: 1.3;
@@ -653,323 +317,30 @@
     document.documentElement.appendChild(style);
   }
 
-  function findDisplayTime(ticketElement, lines) {
-    const elements = Array.from(
-      ticketElement.querySelectorAll(
-        "span.MuiTypography-colorTextSecondary, span.MuiTypography-body2, span[class*='MuiTypography-colorTextSecondary'], span[class*='MuiTypography-body2']"
-      )
-    );
-    const timeFromTypography = findFirst(elements.filter(isVisibleElement), (element) => getVisibleText(element).match(TIME_PATTERN)?.[0]);
-    return timeFromTypography || findFirst(lines, (line) => line.match(TIME_PATTERN)?.[0]) || "";
-  }
-
-  function isInactiveTicket(ticket) {
-    return Number(ticket?.inactivityMinutes || 0) > INACTIVITY_THRESHOLD_MINUTES;
-  }
-
-  function calculateInactivityMinutes(displayTime, now = new Date()) {
-    const match = normalizeText(displayTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
-    if (!match) {
-      return null;
-    }
-
-    const displayedAt = new Date(now);
-    displayedAt.setHours(Number(match[1]), Number(match[2]), 0, 0);
-
-    let diffMs = now.getTime() - displayedAt.getTime();
-    if (diffMs < 0) {
-      const aheadMs = Math.abs(diffMs);
-      if (aheadMs <= 12 * 60 * 60 * 1000) {
-        return 0;
-      }
-      diffMs += 24 * 60 * 60 * 1000;
-    }
-
-    return Math.floor(diffMs / ONE_MINUTE_MS);
-  }
-
-  function findClientName(lines, ignored) {
-    const firstStrongCandidate = lines.find((line) => {
-      if (!looksLikeClientName(line)) return false;
-      if (isIgnoredLine(line, ignored)) return false;
-      if (getCompanyPrefix(line)) return false;
-      if (isKnownAttendant(line)) return false;
-      return countWords(line) >= 2 || calculateUppercaseRatio(line) >= 0.7;
-    });
-
-    return firstStrongCandidate || lines.find((line) => looksLikeClientName(line) && !isIgnoredLine(line, ignored)) || "";
-  }
-
-  function findAttendant(lines, ignored) {
-    const knownAttendant = lines.find((line) => isKnownAttendant(line) && !isIgnoredLine(line, ignored));
-    return knownAttendant ? normalizeAttendantName(knownAttendant) : "";
-  }
-
-  function findCompany(lines, tag) {
-    return (
-      lines.find((line) => {
-        if (line === tag) return false;
-        return Boolean(getCompanyPrefix(line));
-      }) || ""
-    );
-  }
-
-  function findFirst(lines, selector) {
-    for (const line of lines) {
-      const result = selector(line);
-      if (result) return result;
-    }
-    return "";
-  }
-
-  function extractLines(text) {
-    return String(text || "")
-      .split(/\n| {2,}|\t/g)
-      .map(normalizeText)
-      .flatMap((line) => splitCombinedLine(line))
-      .map(normalizeText)
-      .filter(Boolean)
-      .filter((line, index, array) => array.indexOf(line) === index);
-  }
-
-  function splitCombinedLine(line) {
-    const withBreaks = line
-      .replace(/(Suporte\s*-\s*[A-Za-z0-9_-]+)/gi, "\n$1\n")
-      .replace(/\b([01]\d|2[0-3]):[0-5]\d\b/g, "\n$&\n")
-      .replace(/(NETFIBRA[-\s]?[A-Z0-9_-]+)/gi, "\n$1\n");
-    return withBreaks.split("\n");
-  }
-
-  function normalizeText(value) {
-    return String(value || "")
-      .replace(/\u00a0/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  function getVisibleText(element) {
-    return String(element?.innerText || element?.textContent || "").replace(/\u00a0/g, " ").trim();
-  }
-
-  function isIgnoredLine(line, ignored) {
-    return Object.values(ignored).filter(Boolean).includes(line) || TIME_PATTERN.test(line);
-  }
-
-  function looksLikeClientName(line) {
-    if (!line || line.length < 4 || line.length > 100) return false;
-    if (isKnownAttendant(line)) return false;
-    if (looksLikeAttendantCompanyLine(line)) return false;
-    if (looksLikeAnyQueue(line)) return false;
-    if (getCompanyPrefix(line)) return false;
-    if (matchesClientTagPattern(line)) return false;
-    if (TIME_PATTERN.test(line)) return false;
-    if (isPlaceholderLine(line)) return false;
-    if (/^(All|Aberto|Fechado|Pendente|Resolvido|Atendente|Cliente|Fila|Tags?|N[aãÃ]o identificado|Cliente n[aãÃ]o identificado)$/i.test(line)) {
-      return false;
-    }
-    if (/[.!?]{1,}/.test(line) && calculateUppercaseRatio(line) < 0.7) return false;
-    if (/[a-z]{2,}\s+[a-z]{2,}/.test(line) && calculateUppercaseRatio(line) < 0.55) return false;
-    return /[A-Za-z]{3,}/.test(line);
-  }
-
-  function isPlaceholderLine(line) {
-    const normalized = normalizeTagText(line);
-    return /^(ALL|ABERTO|FECHADO|PENDENTE|RESOLVIDO|ATENDENTE|RESPONSAVEL|USUARIO|CLIENTE|FILA|TAG|TAGS|NAO IDENTIFICADO|CLIENTE NAO IDENTIFICADO)$/.test(
-      normalized
-    );
-  }
-
-  function normalizeAttendantName(value) {
-    const text = normalizeText(value).replace(/[.,;:]+$/g, "");
-    if (!text) return "";
-    const key = normalizeAttendantKey(text);
-    const exact = KNOWN_ATTENDANTS.get(key);
-    if (exact) return exact;
-
-    for (const [attendantKey, canonical] of KNOWN_ATTENDANTS.entries()) {
-      if (!key.startsWith(attendantKey)) continue;
-      const suffix = key.slice(attendantKey.length).trim();
-      if (!suffix || isCompanySuffix(suffix)) {
-        return canonical;
-      }
-    }
-
-    const attendantOnly = extractAttendantFromCompanyLine(text);
-    return attendantOnly || text;
-  }
-
-  // "0800 TERRANET", "0800MIXTEL", "- MIX" etc. sao sufixos de empresa/fila
-  // colados no nome do atendente, e nao parte do nome do cliente.
-  function isCompanySuffix(value) {
-    const compact = normalizeTagText(value).replace(/[^A-Z0-9]/g, "");
-    if (!compact) return false;
-    const withoutPhone = compact.replace(/^0800/, "");
-    if (compact !== withoutPhone) return true;
-    return COMPANY_TOKENS.some((token) => withoutPhone.startsWith(token));
-  }
-
-  // Detecta o padrao "<Atendente>0800 <EMPRESA>" mesmo para atendentes que
-  // ainda nao estao na lista KNOWN_ATTENDANTS.
-  function looksLikeAttendantCompanyLine(value) {
-    return Boolean(extractAttendantFromCompanyLine(value));
-  }
-
-  function extractAttendantFromCompanyLine(value) {
-    const text = normalizeText(value);
-    const match = text.match(ATTENDANT_COMPANY_LINE);
-    if (!match) return "";
-
-    const name = normalizeText(match[1]).replace(/[-–—_|/,.]+$/g, "");
-    const company = normalizeText(match[2] || "");
-    if (!name || countWords(name) > 4 || !/[A-Za-zÀ-ÿ]{3,}/.test(name)) {
-      return "";
-    }
-    if (company && !isCompanySuffix(company)) {
-      return "";
-    }
-
-    const known = KNOWN_ATTENDANTS.get(normalizeAttendantKey(name));
-    return known || name;
-  }
-
-  function isKnownAttendant(value) {
-    const text = normalizeText(value);
-    if (!text) return false;
-    return normalizeAttendantName(text) !== text.replace(/[.,;:]+$/g, "") || KNOWN_ATTENDANTS.has(normalizeAttendantKey(text));
-  }
-
-  function normalizeAttendantKey(value) {
-    return normalizeText(value)
-      .replace(/[.,;:]+$/g, "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toUpperCase();
-  }
-
-  function looksLikeAnyQueue(line) {
-    return /^Suporte\s*-\s*[A-Za-z0-9_-]+$/i.test(normalizeText(line));
-  }
-
-  function normalizeQueueName(line) {
-    const text = normalizeText(line);
-    const match = text.match(QUEUE_PATTERN);
-    if (!match) return "";
-    const code = normalizeQueueCode(match[1]);
-    if (!ALLOWED_QUEUE_CODES.has(code)) return "";
-    return `Suporte-${ALLOWED_QUEUE_LABELS[code]}`;
-  }
-
-  function isAllowedQueue(line) {
-    return Boolean(normalizeQueueName(line));
-  }
-
-  function normalizeQueueCode(value) {
-    return normalizeText(value).replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-  }
-
-  function getCompanyPrefix(line) {
-    const text = normalizeText(line).toUpperCase();
-    return COMPANY_PREFIXES.find((prefix) => text === prefix || text.startsWith(`${prefix} `) || text.startsWith(`${prefix}-`)) || "";
-  }
-
-  function calculateUppercaseRatio(text) {
-    const letters = Array.from(text).filter((char) => /[A-Za-z]/.test(char));
-    if (!letters.length) return 0;
-    const upper = letters.filter((char) => char === char.toUpperCase() && char !== char.toLowerCase()).length;
-    return upper / letters.length;
-  }
-
-  function countWords(text) {
-    return normalizeText(text).split(/\s+/).filter(Boolean).length;
-  }
-
-  function isLightColor(color) {
-    const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
-    if (!match) return false;
-    const [, red, green, blue] = match.map(Number);
-    const brightness = (red * 299 + green * 587 + blue * 114) / 1000;
-    return brightness > 170;
-  }
-
-  function isVisibleElement(element) {
-    if (!(element instanceof Element)) return false;
-    const rect = element.getBoundingClientRect();
-    const style = window.getComputedStyle(element);
-    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-  }
-
-  function overlapRatio(a, b) {
-    const xOverlap = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
-    const yOverlap = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
-    const overlapArea = xOverlap * yOverlap;
-    const smallerArea = Math.min(a.width * a.height, b.width * b.height);
-    return smallerArea ? overlapArea / smallerArea : 0;
-  }
-
-  function createTicketKey(ticket) {
-    const stableLine = findStableTicketLine(ticket.lines || [], ticket);
-    return [ticket.clientName || stableLine, ticket.queue, ticket.attendant, ticket.company, ticket.displayTime]
-      .map((part) => normalizeText(part).toUpperCase())
-      .join("|");
-  }
-
-  function findStableTicketLine(lines, ticket) {
-    return (
-      lines.find((line) => {
-        if (isIgnoredLine(line, ticket)) return false;
-        if (looksLikeAnyQueue(line)) return false;
-        if (getCompanyPrefix(line)) return false;
-        if (TIME_PATTERN.test(line)) return false;
-        return line.length >= 4;
-      }) ||
-      ticket.queue ||
-      String(ticket.index || 0)
-    );
-  }
-
-  function rectToPlain(rect) {
-    return {
-      top: Math.round(rect.top),
-      left: Math.round(rect.left),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height)
-    };
-  }
-
-  function buildDiagnostics(reason, tickets) {
+  function buildDiagnostics(reason, tickets, apiDiagnostics = {}) {
     const missingTags = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG").length;
     let captureStatus = "tickets_detectados";
-    let parserMessage = `${tickets.length} ticket(s) detectado(s).`;
+    let parserMessage = `${tickets.length} ticket(s) lido(s) pela API oficial em ${apiDiagnostics.requisicoes || 0} requisicao(oes).`;
 
     if (!tickets.length) {
       captureStatus = "nenhum_ticket_detectado";
       parserMessage =
-        "A extensao foi carregada, mas nao encontrou tickets nas filas monitoradas: TerraNet, PLANET, MIX, IDEZ, BDG e AIA.";
+        "A API respondeu, mas nenhum ticket em atendimento esta nas filas monitoradas: TerraNet, PLANET, MIX, IDEZ, BDG e AIA.";
     } else if (missingTags > 0) {
       captureStatus = "tickets_sem_tag_detectados";
-      parserMessage = `${missingTags} ticket(s) sem TAG detectado(s).`;
+      parserMessage = `${missingTags} ticket(s) sem TAG entre os ${tickets.length} lidos pela API oficial.`;
     }
 
     return {
-      parserVersion: PARSER_VERSION,
+      parserVersion: READER_VERSION,
       reason,
       captureStatus,
       parserMessage,
-      candidateCount: lastCollectDiagnostics.candidateCount,
-      selectedCount: lastCollectDiagnostics.selectedCount,
-      specificCandidateCount: lastCollectDiagnostics.specificCandidateCount,
-      selectorMode: lastCollectDiagnostics.selectorMode,
-      visibleTextLength: lastCollectDiagnostics.visibleTextLength
-    };
-  }
-
-  function emptyCollectDiagnostics() {
-    return {
-      specificCandidateCount: 0,
-      candidateCount: 0,
-      selectedCount: 0,
-      visibleTextLength: 0,
-      selectorMode: "none"
+      origem: "api-oficial",
+      // Mantem os nomes que o popup ja exibe: recebidos x monitorados.
+      candidateCount: Number(apiDiagnostics.ticketsRecebidos || 0),
+      selectedCount: Number(apiDiagnostics.ticketsMonitorados || tickets.length),
+      requisicoes: Number(apiDiagnostics.requisicoes || 0)
     };
   }
 
@@ -994,25 +365,24 @@
   }
 
   window.McallTicketTagMonitor = {
-    parseTicketsFromDOM,
-    detectClientTag,
-    showMissingTagAlert,
     scanAndSend,
-    debug() {
-      const tickets = parseTicketsFromDOM();
-      const diagnostics = buildDiagnostics("debug", tickets);
+    async debug() {
+      const { tickets, diagnostics } = await api.collect();
       console.table(
         tickets.map((ticket) => ({
+          ticketId: ticket.externalTicketId,
           clientName: ticket.clientName,
           queue: ticket.queue,
           attendant: ticket.attendant,
           company: ticket.company,
           displayTime: ticket.displayTime,
+          inactivityMinutes: ticket.inactivityMinutes,
           tag: ticket.tag,
           tagStatus: ticket.tagStatus
         }))
       );
       return { diagnostics, tickets };
-    }
+    },
+    lastDiagnostics: () => lastDiagnostics
   };
 })();

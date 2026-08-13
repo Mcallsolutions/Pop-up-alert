@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Mcall Ticket Tag Monitor",
-  "description": "Monitora tickets do MTalk e alerta quando a TAG do cliente nao foi registrada.",
-  "version": "0.0.1",
+  "description": "Le os tickets pela API oficial do MTalk e alerta quando a TAG do cliente nao foi registrada.",
+  "version": "0.0.2",
   "icons": {
     "16": "assets/icon-16.png",
     "48": "assets/icon-48.png",
@@ -18,7 +18,7 @@
     "storage"
   ],
   "host_permissions": [
-    "https://s11.mtalk.com.br/tickets*",
+    "https://s11.mtalk.com.br/*",
     "http://localhost:3333/*",
     "https://pop-up-alert.vercel.app/*",
     "https://*.vercel.app/*"
@@ -32,10 +32,11 @@
         "https://s11.mtalk.com.br/tickets*"
       ],
       "js": [
+        "src/mtalk-api.js",
         "src/content.js"
       ],
       "run_at": "document_idle",
-      "all_frames": true
+      "all_frames": false
     }
   ]
 }

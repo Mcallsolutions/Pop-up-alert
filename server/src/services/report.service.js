@@ -1,4 +1,5 @@
 const { getDatabase } = require("../database");
+const { getInactivityThresholdMinutes } = require("../config/monitoring");
 const { getAllowedQueues } = require("./queue-filter");
 const {
   getKnownAttendants,
@@ -7,13 +8,20 @@ const {
   sanitizeClientName
 } = require("./attendant-filter");
 
-const INACTIVITY_THRESHOLD_MINUTES = 15;
+const INACTIVITY_THRESHOLD_MINUTES = getInactivityThresholdMinutes();
+
+// Linhas gravadas a partir da API oficial do MTalk. Nelas cada campo veio do
+// cadastro (contato, fila, usuario, conexao, tags), entao as heuristicas de
+// limpeza da leitura de tela nao se aplicam — e chegariam a atrapalhar, por
+// exemplo apagando um cliente cujo nome comeca com "MIX".
+const FROM_MTALK_API_SQL = `trim(coalesce(external_ticket_id, '')) <> ''`;
 
 // Mesma limpeza aplicada na escrita (ticket.service), porem em SQL: descarta
 // nomes que na verdade sao atendente, empresa ou rotulo da tela do MTalk.
 const SANITIZED_CLIENT_NAME_SQL = `
   CASE
     WHEN client_name IS NULL OR trim(client_name) = '' THEN ''
+    WHEN ${FROM_MTALK_API_SQL} THEN trim(client_name)
     WHEN UPPER(TRIM(client_name)) IN (
       'STEPHANIE',
       'GABRIEL OLIVEIRA',
@@ -72,8 +80,12 @@ const TICKET_KEY_SQL = `
   END
 `;
 
+// Com o id do ticket vindo da API nao ha o que adivinhar: cada ticket e uma
+// linha, e leituras repetidas do mesmo ticket colapsam na mais recente.
 const REPORT_DEDUPE_KEY_SQL = `
   CASE
+    WHEN ${FROM_MTALK_API_SQL}
+    THEN 'mtalk|' || trim(external_ticket_id)
     WHEN (${SANITIZED_CLIENT_KEY_SQL}) <> ''
     THEN 'client|' || ${SANITIZED_CLIENT_KEY_SQL}
     ELSE ${TICKET_KEY_SQL}
@@ -164,13 +176,18 @@ async function getMissingTags(filters = {}) {
       SELECT
         id,
         snapshot_id AS "snapshotId",
+        external_ticket_id AS "externalTicketId",
+        ticket_uuid AS "ticketUuid",
+        ticket_status AS "ticketStatus",
         ${SANITIZED_CLIENT_NAME_SQL} AS "clientName",
         queue_name AS queue,
         ${attendantSql} AS attendant,
         company,
         display_time AS "displayTime",
+        last_message_at AS "lastMessageAt",
         inactivity_minutes AS "inactivityMinutes",
         tag,
+        tags,
         tag_status AS "tagStatus",
         source_url AS url,
         collected_at AS "collectedAt"
@@ -290,13 +307,18 @@ async function getInactiveTickets(filters = {}) {
       SELECT
         id,
         snapshot_id AS "snapshotId",
+        external_ticket_id AS "externalTicketId",
+        ticket_uuid AS "ticketUuid",
+        ticket_status AS "ticketStatus",
         ${SANITIZED_CLIENT_NAME_SQL} AS "clientName",
         queue_name AS queue,
         ${buildAttendantCaseSql()} AS attendant,
         company,
         display_time AS "displayTime",
+        last_message_at AS "lastMessageAt",
         inactivity_minutes AS "inactivityMinutes",
         tag,
+        tags,
         tag_status AS "tagStatus",
         source_url AS url,
         collected_at AS "collectedAt"
@@ -529,12 +551,22 @@ function normalizeComparableText(value) {
 }
 
 function sanitizeTicketRow(row) {
+  const fromApi = Boolean(String(row.externalTicketId || "").trim());
+
   return {
     ...row,
-    clientName: sanitizeClientName(row.clientName),
-    attendant: sanitizeAttendantName(row.attendant),
+    clientName: fromApi ? String(row.clientName || "").trim() : sanitizeClientName(row.clientName),
+    attendant: fromApi ? String(row.attendant || "").trim() : sanitizeAttendantName(row.attendant),
+    tags: splitTags(row.tags),
     inactivityMinutes: row.inactivityMinutes === null || row.inactivityMinutes === undefined ? null : Number(row.inactivityMinutes || 0)
   };
+}
+
+function splitTags(value) {
+  return String(value || "")
+    .split("|")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
 }
 
 function buildAttendantCaseSql() {
@@ -556,7 +588,10 @@ function buildAttendantCaseSql() {
       return `WHEN UPPER(TRIM(attendant)) = '${upper}' ${companyClauses} THEN '${canonical}'`;
     })
     .join(" ");
-  return `CASE ${clauses} ELSE '' END`;
+  // Nas linhas da API o atendente e o proprio user.name do MTalk, entao passa
+  // direto: descartar quem nao esta na lista de apelidos so faria sentido
+  // enquanto o nome vinha de texto lido da tela.
+  return `CASE ${clauses} WHEN ${FROM_MTALK_API_SQL} THEN trim(coalesce(attendant, '')) ELSE '' END`;
 }
 
 function escapeSqlLiteral(value) {
