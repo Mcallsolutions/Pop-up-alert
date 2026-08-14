@@ -11,6 +11,7 @@ export default function Reports() {
   const [filters, setFilters] = useState(emptyFilters);
   const [tickets, setTickets] = useState([]);
   const [hiddenCount, setHiddenCount] = useState(0);
+  const [waitingCount, setWaitingCount] = useState(0);
   const [attendants, setAttendants] = useState([]);
   const [queues, setQueues] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -27,6 +28,7 @@ export default function Reports() {
       ]);
       setTickets(missingData.items || []);
       setHiddenCount(Number(missingData.incompletosOcultos || 0));
+      setWaitingCount(Number(missingData.semAtendenteOcultos || 0));
       setAttendants(attendantData.items || []);
       setQueues(queueData.items || []);
     } catch (requestError) {
@@ -115,6 +117,14 @@ export default function Reports() {
         <p className="notice">
           {hiddenCount} {hiddenCount === 1 ? "registro foi ocultado" : "registros foram ocultados"}: a leitura do MTalk
           reconheceu apenas a fila, sem identificar o cliente.
+        </p>
+      ) : null}
+
+      {waitingCount ? (
+        <p className="notice">
+          {waitingCount} {waitingCount === 1 ? "ticket sem TAG esta" : "tickets sem TAG estao"} aguardando na fila, sem
+          atendente vinculado, e {waitingCount === 1 ? "ficou" : "ficaram"} fora desta lista: nao ha responsavel a quem
+          cobrar a TAG. {waitingCount === 1 ? "Ele continua" : "Eles continuam"} no relatorio de inatividade.
         </p>
       ) : null}
 

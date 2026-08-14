@@ -56,7 +56,10 @@
     const { tickets, diagnostics } = await api.collect();
     lastDiagnostics = diagnostics;
 
-    const missingTickets = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG");
+    // Ticket aguardando na fila nao tem a quem cobrar a TAG, entao fica fora
+    // desse alerta — mas continua no de inatividade, que e onde "parado e sem
+    // responsavel" precisa aparecer. Mesma regra do relatorio do painel.
+    const missingTickets = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG" && hasResponsible(ticket));
     const inactiveTickets = tickets.filter(isInactiveTicket);
     const scanDiagnostics = buildDiagnostics(reason, tickets, diagnostics);
 
@@ -123,6 +126,11 @@
 
   function isInactiveTicket(ticket) {
     return Number(ticket?.inactivityMinutes || 0) > INACTIVITY_THRESHOLD_MINUTES;
+  }
+
+  // Atendente vazio na API significa que ninguem assumiu o ticket ainda.
+  function hasResponsible(ticket) {
+    return Boolean(String(ticket?.attendant || "").trim());
   }
 
   function renderTicketAlerts(missingTagTickets, inactiveTickets, options = {}) {
@@ -318,9 +326,11 @@
   }
 
   function buildDiagnostics(reason, tickets, apiDiagnostics = {}) {
-    const missingTags = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG").length;
+    const waiting = tickets.filter((ticket) => !hasResponsible(ticket)).length;
+    const missingTags = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG" && hasResponsible(ticket)).length;
+    const waitingText = waiting ? ` ${waiting} aguardando atendente.` : "";
     let captureStatus = "tickets_detectados";
-    let parserMessage = `${tickets.length} ticket(s) lido(s) pela API oficial em ${apiDiagnostics.requisicoes || 0} requisicao(oes).`;
+    let parserMessage = `${tickets.length} ticket(s) lido(s) pela API oficial em ${apiDiagnostics.requisicoes || 0} requisicao(oes).${waitingText}`;
 
     if (!tickets.length) {
       captureStatus = "nenhum_ticket_detectado";
@@ -328,7 +338,7 @@
         "A API respondeu, mas nenhum ticket em atendimento esta nas filas monitoradas: TerraNet, PLANET, MIX, IDEZ, BDG e AIA.";
     } else if (missingTags > 0) {
       captureStatus = "tickets_sem_tag_detectados";
-      parserMessage = `${missingTags} ticket(s) sem TAG entre os ${tickets.length} lidos pela API oficial.`;
+      parserMessage = `${missingTags} ticket(s) sem TAG entre os ${tickets.length} lidos pela API oficial.${waitingText}`;
     }
 
     return {

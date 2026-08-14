@@ -22,6 +22,7 @@ const DEFAULT_STATUS = {
   totalTickets: 0,
   missingTags: 0,
   withTags: 0,
+  waitingTickets: 0,
   currentUrl: ""
 };
 
@@ -124,6 +125,7 @@ async function sendSnapshot(payload) {
     totalTickets: totals.totalTickets,
     missingTags: totals.missingTags,
     withTags: totals.withTags,
+    waitingTickets: totals.waitingTickets,
     currentUrl: payload.url || ""
   });
 
@@ -207,13 +209,18 @@ function describeSendFailure(error, endpoint) {
   return mensagem;
 }
 
+// Ticket aguardando na fila (sem atendente vinculado) nao entra na conta de
+// TAG: nao ha a quem cobrar. Ele vira um numero proprio, para que
+// totalTickets = withTags + missingTags + waitingTickets continue fechando.
 function countTickets(tickets) {
-  const totalTickets = tickets.length;
-  const missingTags = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG").length;
+  const comResponsavel = tickets.filter((ticket) => String(ticket.attendant || "").trim());
+  const missingTags = comResponsavel.filter((ticket) => ticket.tagStatus === "SEM_TAG").length;
+
   return {
-    totalTickets,
+    totalTickets: tickets.length,
     missingTags,
-    withTags: totalTickets - missingTags
+    withTags: comResponsavel.length - missingTags,
+    waitingTickets: tickets.length - comResponsavel.length
   };
 }
 

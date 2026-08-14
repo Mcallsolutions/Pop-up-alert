@@ -3,6 +3,7 @@ const elements = {
   totalTickets: document.getElementById("totalTickets"),
   missingTags: document.getElementById("missingTags"),
   withTags: document.getElementById("withTags"),
+  waitingTickets: document.getElementById("waitingTickets"),
   lastReadAt: document.getElementById("lastReadAt"),
   lastSentAt: document.getElementById("lastSentAt"),
   currentUrl: document.getElementById("currentUrl"),
@@ -83,6 +84,7 @@ function renderStatus(status = {}) {
   elements.totalTickets.textContent = status.totalTickets || 0;
   elements.missingTags.textContent = status.missingTags || 0;
   elements.withTags.textContent = status.withTags || 0;
+  elements.waitingTickets.textContent = status.waitingTickets || 0;
   elements.lastReadAt.textContent = formatDate(status.lastReadAt);
   elements.lastSentAt.textContent = formatDate(status.lastSentAt);
   elements.currentUrl.textContent = status.currentUrl || "-";

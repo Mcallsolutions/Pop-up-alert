@@ -27,6 +27,7 @@ dataRoutes.all("/collect", async (req, res, next) => {
       totalTickets: result.totalTickets,
       totalWithTag: result.totalWithTag,
       totalWithoutTag: result.totalWithoutTag,
+      totalWithoutAttendant: result.totalWithoutAttendant,
       totalInactive: result.totalInactive,
       thresholdMinutes: result.thresholdMinutes,
       snapshot: result.snapshot,

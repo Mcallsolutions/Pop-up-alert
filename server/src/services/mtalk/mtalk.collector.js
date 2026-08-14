@@ -52,10 +52,14 @@ async function collectFromMtalk({ token, persist = true } = {}) {
     }
   };
 
+  // Mesma divisao dos relatorios: TAG so conta onde ha atendente vinculado;
+  // inatividade conta tudo, inclusive quem esta aguardando na fila.
+  const comResponsavel = tickets.filter((ticket) => String(ticket.attendant || "").trim());
   const totals = {
     totalTickets: tickets.length,
-    totalWithTag: tickets.filter((ticket) => ticket.tagStatus === "COM_TAG").length,
-    totalWithoutTag: tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG").length,
+    totalWithTag: comResponsavel.filter((ticket) => ticket.tagStatus === "COM_TAG").length,
+    totalWithoutTag: comResponsavel.filter((ticket) => ticket.tagStatus === "SEM_TAG").length,
+    totalWithoutAttendant: tickets.length - comResponsavel.length,
     totalInactive: tickets.filter((ticket) => Number(ticket.inactivityMinutes || 0) > threshold).length
   };
 

@@ -225,8 +225,29 @@ o **cliente** foi identificado. Linhas em que a leitura reconheceu apenas a fila
 linhas vazias na tabela: elas sao contadas em `incompletosOcultos` na resposta de
 `missing-tags`, e o painel mostra esse numero abaixo dos filtros.
 
-Atendente e empresa nao entram nessa exigencia de proposito: na tela do MTalk os dois sao
-alternativos (a coluna mostra um ou o outro), entao exigir ambos esvaziaria a lista.
+Empresa nao entra nessa exigencia de proposito: nas linhas antigas, lidas da tela, empresa e
+atendente eram alternativos (a coluna mostrava um ou o outro), entao exigir ambos esvaziaria
+a lista.
+
+### Tickets aguardando na fila (sem atendente)
+
+Na leitura pela API, um ticket com `status = pending` normalmente vem **sem atendente
+vinculado** (`user` nulo): ninguem o assumiu ainda. Nessas linhas o campo vazio e um fato, e
+nao falha de leitura, entao os relatorios tratam os dois casos de forma diferente:
+
+| Relatorio | Ticket sem atendente |
+| --- | --- |
+| `missing-tags`, `by-queue`, `by-attendant`, contadores de TAG do `summary` | **fora** — nao ha responsavel a quem cobrar a TAG |
+| `inactivity/*` e `totalInactive` do `summary` | **dentro** — parado e sem responsavel e o caso mais grave |
+
+Quantos ficaram de fora aparece em `semAtendenteOcultos` (resposta de `missing-tags`) e em
+`totalWithoutAttendant` (resposta de `summary`); o painel mostra os dois. A `compliancePercent`
+considera apenas o que da para cobrar, entao uma fila cheia de espera nao derruba o percentual
+de quem esta atendendo.
+
+Essa regra vale **so para as linhas gravadas pela API**. No historico da leitura de tela,
+atendente vazio significava falha de leitura, e aplicar o corte ali esvaziaria os relatorios
+antigos.
 
 Endpoints da extensao:
 

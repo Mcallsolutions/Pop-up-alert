@@ -243,6 +243,9 @@ async function buildContext(filters) {
     inatividadePorAtendente: inatividadePorAtendente.items,
     ticketsSemTag: semTag.items.slice(0, MAX_CONTEXT_TICKETS).map(toContextTicket),
     ticketsSemTagOcultos: semTag.incompletosOcultos,
+    // Aguardando na fila, sem atendente: contam para inatividade, mas nao ha
+    // a quem cobrar a TAG. Vai explicito para a IA nao ler como omissao.
+    ticketsSemTagAguardandoAtendente: semTag.semAtendenteOcultos,
     ticketsInativos: inativos.items.slice(0, MAX_CONTEXT_TICKETS).map(toContextTicket)
   };
 }

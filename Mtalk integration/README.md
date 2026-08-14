@@ -104,3 +104,24 @@ linha por ticket, e nao mais uma por cliente. Nessas linhas as heuristicas de
 limpeza sao puladas de proposito: o nome vem do cadastro do contato, entao um
 cliente chamado "MIXTELECOM" nao e mais confundido com nome de empresa, e um
 atendente novo aparece no relatorio sem precisar entrar na lista de apelidos.
+
+## Tickets aguardando na fila
+
+Ler o status `pending` traz tickets que **ninguem assumiu ainda**: o MTalk
+devolve `userId` e `user` nulos, e o atendente chega vazio ate o relatorio. Ao
+contrario da leitura de tela, onde atendente vazio era falha de leitura, aqui e
+um fato — e os dois casos precisam de tratamento diferente:
+
+- **relatorios de TAG** (`missing-tags`, `by-queue`, `by-attendant` e os
+  contadores de TAG do `summary`): ficam de fora. Nao ha responsavel a quem
+  cobrar a TAG, e conta-los como falha distorce a conformidade de quem esta
+  atendendo;
+- **relatorios de inatividade**: continuam dentro. Um ticket parado ha 50
+  minutos sem ninguem atendendo e exatamente o alerta que importa.
+
+O alerta na tela segue a mesma divisao: "Registre a TAG do cliente" so lista
+tickets com atendente; "Alerta de inatividade" lista todos.
+
+O corte e aplicado apenas nas linhas com `external_ticket_id` preenchido, ou
+seja, nas gravadas pela API. O historico da leitura de tela continua com a regra
+antiga.

@@ -105,6 +105,23 @@ const IDENTIFIED_TICKET_SQL = `(
   AND trim(coalesce(queue_name, '')) <> ''
 )`;
 
+// Existe alguem a quem cobrar a TAG.
+//
+// Nas linhas da API, atendente vazio e um FATO: o ticket esta aguardando na
+// fila e ninguem o assumiu (o MTalk devolve user/userId nulos). Cobrar TAG de
+// um atendimento que ninguem pegou nao faz sentido, entao ele sai dos
+// relatorios de TAG — mas continua inteiro nos de inatividade, onde "parado e
+// sem responsavel" e justamente o caso mais grave.
+//
+// Nas linhas antigas, de leitura de tela, atendente vazio significava outra
+// coisa: a tela mostrava atendente OU empresa, entao o campo em branco era
+// falha de leitura, nao ausencia de responsavel. Por isso a regra so vale para
+// as linhas da API — aplicar no historico esvaziaria os relatorios antigos.
+const HAS_RESPONSIBLE_SQL = `(
+  NOT (${FROM_MTALK_API_SQL})
+  OR trim(coalesce(attendant, '')) <> ''
+)`;
+
 // Prefixo comum das consultas: aplica os filtros e mantem, de cada ticket
 // repetido entre snapshots, apenas a leitura mais recente.
 function buildRankedTicketsSql(where) {
@@ -134,8 +151,9 @@ async function getSummary(filters = {}) {
       ${buildRankedTicketsSql(where)}
       SELECT
         COUNT(*) AS "totalTicketsProcessed",
-        SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS "totalWithTag",
-        SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS "totalWithoutTag",
+        SUM(CASE WHEN tag_status = 'COM_TAG' AND ${HAS_RESPONSIBLE_SQL} THEN 1 ELSE 0 END) AS "totalWithTag",
+        SUM(CASE WHEN tag_status = 'SEM_TAG' AND ${HAS_RESPONSIBLE_SQL} THEN 1 ELSE 0 END) AS "totalWithoutTag",
+        SUM(CASE WHEN NOT ${HAS_RESPONSIBLE_SQL} THEN 1 ELSE 0 END) AS "totalWithoutAttendant",
         SUM(CASE WHEN COALESCE(inactivity_minutes, 0) > ${INACTIVITY_THRESHOLD_MINUTES} THEN 1 ELSE 0 END) AS "totalInactive",
         MAX(collected_at) AS "lastCollectedAt"
       FROM ranked
@@ -146,13 +164,21 @@ async function getSummary(filters = {}) {
 
   const totalTicketsProcessed = Number(row.totalTicketsProcessed || 0);
   const totalWithTag = Number(row.totalWithTag || 0);
-  const compliancePercent = totalTicketsProcessed ? Number(((totalWithTag / totalTicketsProcessed) * 100).toFixed(2)) : 0;
+  const totalWithoutTag = Number(row.totalWithoutTag || 0);
+  // Conformidade so olha o que da para cobrar: ticket aguardando na fila nao
+  // conta nem a favor nem contra. Sem isso, uma fila cheia de espera derrubaria
+  // o percentual de quem esta atendendo.
+  const totalCobravel = totalWithTag + totalWithoutTag;
+  const compliancePercent = totalCobravel ? Number(((totalWithTag / totalCobravel) * 100).toFixed(2)) : 0;
 
   return {
     totalReadings: Number(readings.totalReadings || 0),
+    // Tudo que foi lido, inclusive o que esta aguardando atendente:
+    // totalTicketsProcessed = totalWithTag + totalWithoutTag + totalWithoutAttendant.
     totalTicketsProcessed,
     totalWithTag,
-    totalWithoutTag: Number(row.totalWithoutTag || 0),
+    totalWithoutTag,
+    totalWithoutAttendant: Number(row.totalWithoutAttendant || 0),
     totalInactive: Number(row.totalInactive || 0),
     compliancePercent,
     lastCollectedAt: row.lastCollectedAt || null
@@ -195,6 +221,7 @@ async function getMissingTags(filters = {}) {
       WHERE rowNumber = 1
         AND tag_status = 'SEM_TAG'
         AND ${IDENTIFIED_TICKET_SQL}
+        AND ${HAS_RESPONSIBLE_SQL}
       ORDER BY datetime(collected_at) DESC, id DESC
       LIMIT ?
     `
@@ -207,7 +234,8 @@ async function getMissingTags(filters = {}) {
       ${rankedSql}
       SELECT
         COUNT(*) AS "totalSemTag",
-        SUM(CASE WHEN ${IDENTIFIED_TICKET_SQL} THEN 1 ELSE 0 END) AS "totalIdentificados"
+        SUM(CASE WHEN ${IDENTIFIED_TICKET_SQL} THEN 1 ELSE 0 END) AS "totalIdentificados",
+        SUM(CASE WHEN ${IDENTIFIED_TICKET_SQL} AND ${HAS_RESPONSIBLE_SQL} THEN 1 ELSE 0 END) AS "totalCobraveis"
       FROM ranked
       WHERE rowNumber = 1
         AND tag_status = 'SEM_TAG'
@@ -217,11 +245,13 @@ async function getMissingTags(filters = {}) {
 
   const totalSemTag = Number(counters?.totalSemTag || 0);
   const totalIdentificados = Number(counters?.totalIdentificados || 0);
+  const totalCobraveis = Number(counters?.totalCobraveis || 0);
 
   return {
     items: rows.map(sanitizeTicketRow),
-    total: totalIdentificados,
-    incompletosOcultos: totalSemTag - totalIdentificados
+    total: totalCobraveis,
+    incompletosOcultos: totalSemTag - totalIdentificados,
+    semAtendenteOcultos: totalIdentificados - totalCobraveis
   };
 }
 
@@ -438,6 +468,7 @@ async function getReportByQueue(filters = {}) {
         SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS "totalWithoutTag"
       FROM ranked
       WHERE rowNumber = 1
+        AND ${HAS_RESPONSIBLE_SQL}
       GROUP BY COALESCE(NULLIF(queue_name, ''), 'Nao identificada')
       ORDER BY "totalWithoutTag" DESC, "totalTickets" DESC
     `
