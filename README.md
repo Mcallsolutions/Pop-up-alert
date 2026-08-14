@@ -269,7 +269,7 @@ O painel tem uma aba **IA** com tres partes:
 2. **Resumo da IA** — os filtros da barra definem o recorte enviado ao modelo. O botao "Gerar resumo com IA" monta o contexto com os mesmos relatorios que o painel exibe (totais, tickets sem TAG, inatividade, quebras por atendente e fila) e chama a OpenAI.
 3. **Historico** — cada resumo fica salvo com modelo, tokens, filtros e responsavel. O ultimo resumo tambem aparece como um card no Dashboard.
 
-A resposta e sempre pedida em JSON (`response_format: json_object`) no formato:
+A resposta e pedida com `response_format: json_schema` em modo **strict**, entao a OpenAI valida o formato no proprio servidor antes de responder:
 
 ```json
 {
@@ -282,7 +282,19 @@ A resposta e sempre pedida em JSON (`response_format: json_object`) no formato:
 }
 ```
 
-Variaveis de ambiente: `OPENAI_API_KEY` (obrigatoria para gerar), `OPENAI_MODEL` (padrao `gpt-4o-mini`), e as opcionais `OPENAI_BASE_URL`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT`, `OPENAI_TEMPERATURE`, `OPENAI_MAX_OUTPUT_TOKENS`, `OPENAI_TIMEOUT_MS` (mantenha abaixo do `maxDuration` de 30s do `vercel.json`).
+Se o modelo ou o endpoint configurado nao aceitar `json_schema`, a chamada reenvia sozinha com `json_object` — o formato continua descrito no prompt, so deixa de ser validado pelo servidor.
+
+### Compatibilidade entre modelos
+
+Familias de modelo aceitam parametros diferentes: as mais novas recusam `max_tokens` (pedem `max_completion_tokens`) e so aceitam a temperatura padrao. Em vez de manter aqui uma lista de modelos que envelhece a cada lancamento, uma resposta `400` e lida e a chamada e reenviada ja corrigida, no maximo duas vezes. A correcao aplicada aparece no log (`[IA] ... reenviando com ...`). Trocar `OPENAI_MODEL` nao exige mudanca de codigo.
+
+### Contagem no resumo
+
+As listas de ticket enviadas ao modelo sao **amostras** de no maximo 40 linhas. Elas vao rotuladas (`total`, `exibidos`, `truncada`) e o prompt manda usar `totais`/`inatividade` para qualquer numero — sem isso o modelo contava as linhas da amostra e escrevia "40 tickets sem TAG" quando havia 180.
+
+Variaveis de ambiente: `OPENAI_API_KEY` (obrigatoria para gerar), `OPENAI_MODEL` (padrao `gpt-4o-mini`), e as opcionais `OPENAI_BASE_URL`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT`, `OPENAI_TEMPERATURE` (padrao `0.2`), `OPENAI_MAX_OUTPUT_TOKENS` (padrao `2000`), `OPENAI_TIMEOUT_MS` (padrao `25000`, mantenha abaixo do `maxDuration` de 30s do `vercel.json`).
+
+As opcionais numericas aceitam ficar **ausentes**, mas nao criadas em branco com sentido diferente: valor vazio cai no padrao. Ate esta versao, `OPENAI_MAX_OUTPUT_TOKENS` vazio virava `max_tokens: 0` e `OPENAI_TIMEOUT_MS` vazio abortava a chamada na hora, com a mensagem "A OpenAI nao respondeu em 0s".
 
 ## Horarios no painel
 

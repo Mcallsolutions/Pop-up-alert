@@ -28,11 +28,55 @@ const SUMMARY_SCHEMA = {
   recomendacoes: ["string — acao pratica sugerida"]
 };
 
+// Mesmo contrato do SUMMARY_SCHEMA, na forma que a OpenAI valida no servidor.
+// Com isso o painel nao depende de o modelo ter "lembrado" dos nomes dos campos.
+const SUMMARY_JSON_SCHEMA = {
+  name: "resumo_operacao_mcall",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["resumo", "nivelRisco", "pontosCriticos", "atendentes", "filas", "recomendacoes"],
+    properties: {
+      resumo: { type: "string" },
+      nivelRisco: { type: "string", enum: ["BAIXO", "MEDIO", "ALTO"] },
+      pontosCriticos: { type: "array", items: { type: "string" } },
+      atendentes: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["nome", "observacao"],
+          properties: { nome: { type: "string" }, observacao: { type: "string" } }
+        }
+      },
+      filas: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["fila", "observacao"],
+          properties: { fila: { type: "string" }, observacao: { type: "string" } }
+        }
+      },
+      recomendacoes: { type: "array", items: { type: "string" } }
+    }
+  }
+};
+
 const BASE_SYSTEM_PROMPT = [
   "Voce e o analista de operacao de atendimento da Mcall.",
   "Recebe dados ja consolidados de tickets do MTalk (uso de TAG e tempo sem resposta) e escreve um resumo gerencial em portugues do Brasil.",
   "Regras: use apenas os numeros recebidos, nunca invente nomes, clientes ou metricas; se um dado nao existir, diga que nao ha informacao;",
   "seja objetivo e direto ao ponto, sempre citando os numeros que sustentam cada afirmacao.",
+  "",
+  "MUITO IMPORTANTE sobre contagem: os campos 'totais', 'inatividade', 'porAtendente' e 'porFila' sao os numeros oficiais do periodo.",
+  "As listas 'ticketsSemTag' e 'ticketsInativos' sao APENAS AMOSTRAS truncadas — cada uma traz 'total' (quantos existem) e 'amostra' (as linhas enviadas).",
+  "Nunca conte os itens da amostra para afirmar quantidade: cite sempre o 'total' correspondente e use a amostra so para dar exemplos.",
+  "",
+  "Sobre atendimento sem responsavel: 'totais.totalWithoutAttendant' sao tickets aguardando na fila, que ninguem assumiu.",
+  "Eles nao entram nos numeros de TAG (nao ha a quem cobrar) mas contam na inatividade. Nao os trate como falha de atendente.",
+  "",
   "Responda SEMPRE com um unico objeto JSON valido, sem texto fora do JSON, seguindo exatamente este formato:",
   JSON.stringify(SUMMARY_SCHEMA, null, 2)
 ].join("\n");
@@ -144,7 +188,7 @@ async function generateSummary(filters = {}, user = null) {
 
   const { items: prompts } = await listPrompts();
   const messages = buildMessages(prompts, contexto);
-  const completion = await createJsonCompletion({ messages });
+  const completion = await createJsonCompletion({ messages, jsonSchema: SUMMARY_JSON_SCHEMA });
 
   return saveSummary({
     content: completion.json,
@@ -238,15 +282,38 @@ async function buildContext(filters) {
     filtros: cleanFilters(filters),
     totais,
     inatividade,
-    porAtendente,
-    porFila,
+    // Os tres vinham com formatos diferentes ({ items: [...] } em dois deles e
+    // array cru no terceiro). Formato unico evita o modelo tratar um como
+    // objeto vazio.
+    porAtendente: porAtendente.items,
+    porFila: porFila.items,
     inatividadePorAtendente: inatividadePorAtendente.items,
-    ticketsSemTag: semTag.items.slice(0, MAX_CONTEXT_TICKETS).map(toContextTicket),
-    ticketsSemTagOcultos: semTag.incompletosOcultos,
-    // Aguardando na fila, sem atendente: contam para inatividade, mas nao ha
-    // a quem cobrar a TAG. Vai explicito para a IA nao ler como omissao.
-    ticketsSemTagAguardandoAtendente: semTag.semAtendenteOcultos,
-    ticketsInativos: inativos.items.slice(0, MAX_CONTEXT_TICKETS).map(toContextTicket)
+    // Amostra rotulada: o total vem junto para o modelo nunca contar linhas.
+    // O total da amostra e o da propria lista (semTag.total), nao o do
+    // cabecalho: o cabecalho conta tambem os tickets sem cliente identificado,
+    // que nunca aparecem na lista.
+    ticketsSemTag: buildSample(semTag.items, semTag.total, {
+      ocultosSemCliente: semTag.incompletosOcultos,
+      // Aguardando na fila: contam para inatividade, mas nao ha a quem cobrar
+      // a TAG. Explicito para a IA nao ler como omissao.
+      aguardandoAtendente: semTag.semAtendenteOcultos
+    }),
+    ticketsInativos: buildSample(inativos.items, inatividade.inactiveTickets)
+  };
+}
+
+// A lista de tickets e cortada em MAX_CONTEXT_TICKETS para nao estourar o
+// prompt. Sem dizer isso ao modelo, ele contava as linhas recebidas e escrevia
+// "40 tickets sem TAG" quando havia 200.
+function buildSample(items, total, extras = {}) {
+  const amostra = (items || []).slice(0, MAX_CONTEXT_TICKETS).map(toContextTicket);
+
+  return {
+    total: Number(total || 0),
+    exibidos: amostra.length,
+    truncada: Number(total || 0) > amostra.length,
+    ...extras,
+    amostra
   };
 }
 
