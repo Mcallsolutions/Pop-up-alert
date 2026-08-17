@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useState } from "react";
 import { FileText, FileType2, Filter, RotateCcw } from "lucide-react";
 import { api } from "../services/api";
+import { todayIsoDate } from "../services/datetime";
 
 export const emptyFilters = {
   day: "",
@@ -9,6 +10,23 @@ export const emptyFilters = {
   company: "",
   clientName: ""
 };
+
+// Chaves de recorte que o servidor aceita (ai.service.cleanFilters). startDate/
+// endDate nao tem campo na barra, mas chegam nos filtros gravados junto do
+// resumo — entram aqui para a comparacao nao ignora-los.
+const FILTER_KEYS = ["day", "startDate", "endDate", "attendant", "queue", "company", "clientName"];
+
+// Recorte padrao de quem precisa falar do agora (pagina de IA): o dia corrente.
+// Sem dia, a consulta varre TODO o historico e o resumo sai misturando semanas.
+export function todayFilters() {
+  return { ...emptyFilters, day: todayIsoDate() };
+}
+
+// Dois recortes sao o mesmo quando todos os campos batem. Campo vazio e campo
+// ausente contam como iguais: o servidor grava apenas os preenchidos.
+export function sameFilters(left, right) {
+  return FILTER_KEYS.every((key) => String(left?.[key] || "").trim() === String(right?.[key] || "").trim());
+}
 
 const emptyOptions = {
   attendants: [],

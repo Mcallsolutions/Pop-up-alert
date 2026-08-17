@@ -1,10 +1,20 @@
 import React, { useState } from "react";
-import { Sparkles } from "lucide-react";
-import { formatDateTime } from "../services/datetime";
+import { AlertTriangle, Sparkles } from "lucide-react";
+import { sameFilters } from "./FilterBar";
+import { formatDateTime, formatDay, isToday } from "../services/datetime";
 
 // Renderiza o JSON devolvido pela OpenAI campo a campo. E o mesmo componente
 // usado na pagina de IA e no card de resumo do dashboard.
-export default function AiSummaryCard({ summary, loading = false, emptyMessage = "Nenhum resumo gerado ainda." }) {
+//
+// currentFilters (opcional) e o recorte selecionado agora na tela: quando ele
+// nao bate com o do resumo guardado, o card avisa em vez de deixar o texto
+// passar por analise do periodo atual.
+export default function AiSummaryCard({
+  summary,
+  loading = false,
+  emptyMessage = "Nenhum resumo gerado ainda.",
+  currentFilters = null
+}) {
   const [showJson, setShowJson] = useState(false);
 
   if (loading) {
@@ -31,6 +41,8 @@ export default function AiSummaryCard({ summary, loading = false, emptyMessage =
 
   const content = summary.content || {};
   const risco = String(content.nivelRisco || "").toUpperCase();
+  const aviso = buildWarning(summary, currentFilters);
+  const outrosFiltros = describeFilters(summary.filters);
 
   return (
     <section className="table-panel ai-summary">
@@ -41,12 +53,19 @@ export default function AiSummaryCard({ summary, loading = false, emptyMessage =
 
       <div className="ai-summary-body">
         <div className="ai-meta">
-          <span>{formatDateTime(summary.createdAt)}</span>
+          <span>Gerado em {formatDateTime(summary.createdAt)}</span>
+          <span>{describePeriod(summary.filters)}</span>
           {summary.model ? <span>Modelo: {summary.model}</span> : null}
           {summary.usage?.totalTokens ? <span>{summary.usage.totalTokens} tokens</span> : null}
-          {describeFilters(summary.filters) ? <span>{describeFilters(summary.filters)}</span> : null}
+          {outrosFiltros ? <span>{outrosFiltros}</span> : null}
           {risco ? <span className={`badge risco-${risco.toLowerCase()}`}>Risco {risco}</span> : null}
         </div>
+
+        {aviso ? (
+          <p className="notice warning ai-stale">
+            <AlertTriangle aria-hidden="true" size={16} /> {aviso}
+          </p>
+        ) : null}
 
         <p className="ai-text">{content.resumo || "A IA nao devolveu o campo 'resumo'."}</p>
 
@@ -97,8 +116,49 @@ function normalizeItems(items) {
     .filter((item) => item.trim());
 }
 
+const FILTER_LABELS = {
+  attendant: "Atendente",
+  company: "Empresa",
+  queue: "Fila",
+  clientName: "Cliente"
+};
+
+// Filtros de recorte que nao sao data. A data sai separada, em describePeriod,
+// porque e ela que diz de QUANDO e o resumo.
 function describeFilters(filters) {
-  const entries = Object.entries(filters || {}).filter(([, value]) => String(value || "").trim());
+  const entries = Object.entries(FILTER_LABELS).filter(([key]) => String(filters?.[key] || "").trim());
   if (!entries.length) return "";
-  return entries.map(([key, value]) => `${key}: ${value}`).join("  |  ");
+  return entries.map(([key, label]) => `${label}: ${filters[key]}`).join("  |  ");
+}
+
+// Periodo que a IA analisou, sempre escrito. Sem dia nem intervalo o resumo
+// cobre TODO o historico — era assim que um resumo do dia 10/08 passava por
+// resumo do dia de hoje.
+function describePeriod(filters) {
+  const day = String(filters?.day || "").trim();
+  if (day) {
+    return `Periodo: ${formatDay(day)}`;
+  }
+
+  const inicio = String(filters?.startDate || "").trim();
+  const fim = String(filters?.endDate || "").trim();
+  if (inicio || fim) {
+    return `Periodo: ${inicio ? formatDay(inicio) : "inicio"} ate ${fim ? formatDay(fim) : "hoje"}`;
+  }
+
+  return "Periodo: todo o historico";
+}
+
+// Duas razoes para o card estar mostrando algo que nao e o agora: o resumo foi
+// gerado em outro dia, ou o recorte da tela mudou depois que ele foi gerado.
+function buildWarning(summary, currentFilters) {
+  if (currentFilters && !sameFilters(summary.filters, currentFilters)) {
+    return "Este resumo foi gerado com outro recorte de filtros. Clique em Gerar resumo com IA para analisar o recorte selecionado agora.";
+  }
+
+  if (!isToday(summary.createdAt)) {
+    return `Resumo antigo, gerado em ${formatDateTime(summary.createdAt)}. Ele nao reflete os dados de hoje — gere um novo resumo.`;
+  }
+
+  return "";
 }

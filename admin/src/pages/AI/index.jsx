@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Bot, Pencil, Plus, RefreshCw, Save, Sparkles, Trash2, X } from "lucide-react";
-import FilterBar, { emptyFilters } from "../../components/FilterBar";
+import FilterBar, { sameFilters, todayFilters } from "../../components/FilterBar";
 import AiSummaryCard from "../../components/AiSummaryCard";
 import { api } from "../../services/api";
 import { formatDateTime } from "../../services/datetime";
@@ -12,8 +12,16 @@ const PROMPT_KINDS = [
 
 const emptyPrompt = { id: null, title: "", kind: "INSTRUCAO", content: "", isActive: true };
 
+// O historico ja vem do mais recente para o mais antigo, entao o primeiro que
+// bater com o recorte da tela e o resumo valido para ele.
+function findSummaryForFilters(items, filters) {
+  return (items || []).find((item) => sameFilters(item.filters, filters)) || null;
+}
+
 export default function AiPage() {
-  const [filters, setFilters] = useState(emptyFilters);
+  // A pagina abre no dia corrente. Com o recorte vazio a consulta pega todo o
+  // historico e o resumo sai falando de dias antigos.
+  const [filters, setFilters] = useState(todayFilters);
   const [status, setStatus] = useState(null);
   const [prompts, setPrompts] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -35,7 +43,10 @@ export default function AiPage() {
       setStatus(statusData);
       setPrompts(promptData.items || []);
       setHistory(historyData.items || []);
-      setSummary((current) => current || historyData.items?.[0] || null);
+      // So reaproveita um resumo ja gravado quando ele e do MESMO recorte que
+      // esta na tela. Antes o card assumia o ultimo resumo existente, entao ao
+      // abrir a pagina aparecia o relatorio pedido em outro dia.
+      setSummary((current) => current || findSummaryForFilters(historyData.items, filters));
     } catch (requestError) {
       setError(requestError.message || "Falha ao carregar a configuracao da IA");
     }
@@ -50,7 +61,7 @@ export default function AiPage() {
   }
 
   function clearFilters() {
-    setFilters(emptyFilters);
+    setFilters(todayFilters());
   }
 
   async function generate() {
@@ -170,7 +181,8 @@ export default function AiPage() {
       <AiSummaryCard
         summary={summary}
         loading={generating}
-        emptyMessage="Nenhum resumo gerado ainda. Ajuste os filtros e clique em Gerar resumo com IA."
+        currentFilters={filters}
+        emptyMessage="Nenhum resumo gerado para este recorte. Clique em Gerar resumo com IA."
       />
 
       {history.length ? (
