@@ -15,6 +15,12 @@ const DEFAULT_PAGE_SIZE = 40;
 // 5 paginas x 40 = 200 tickets, o mesmo teto aceito pelo snapshot.
 const DEFAULT_MAX_PAGES = 5;
 const DEFAULT_QUEUE_CACHE_TTL_MS = 10 * 60 * 1000;
+// O catalogo de TAGs (GET /backend/tags/list) muda menos ainda que as filas.
+const DEFAULT_TAG_CACHE_TTL_MS = 10 * 60 * 1000;
+// Teto de consultas a GET /backend/contacts/{id} por coleta. So sao gastas com
+// ticket que continuaria no alerta e cujo contato veio sem o campo de TAGs na
+// listagem — o objetivo e nunca virar "uma chamada por ticket".
+const DEFAULT_MAX_CONTACT_LOOKUPS = 20;
 const DEFAULT_TIMEOUT_MS = 12000;
 // Tickets que ainda estao em atendimento. "closed" fica de fora de proposito:
 // ticket encerrado nao gera alerta de TAG nem de inatividade.
@@ -38,6 +44,9 @@ function getMtalkConfig() {
     pageSize: readPositiveInteger(process.env.MTALK_PAGE_SIZE, DEFAULT_PAGE_SIZE),
     maxPages: readPositiveInteger(process.env.MTALK_MAX_PAGES, DEFAULT_MAX_PAGES),
     queueCacheTtlMs: readPositiveInteger(process.env.MTALK_QUEUE_CACHE_MINUTES, DEFAULT_QUEUE_CACHE_TTL_MS / 60000) * 60000,
+    tagCacheTtlMs: readPositiveInteger(process.env.MTALK_TAG_CACHE_MINUTES, DEFAULT_TAG_CACHE_TTL_MS / 60000) * 60000,
+    // Zero e valido aqui: desliga a consulta extra ao contato.
+    maxContactLookups: readNonNegativeInteger(process.env.MTALK_MAX_CONTACT_LOOKUPS, DEFAULT_MAX_CONTACT_LOOKUPS),
     timeoutMs: readPositiveInteger(process.env.MTALK_TIMEOUT_MS, DEFAULT_TIMEOUT_MS)
   };
 }
@@ -56,6 +65,11 @@ function readStatuses(value) {
 function readPositiveInteger(value, fallback) {
   const parsed = Number.parseInt(String(value ?? "").trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function readNonNegativeInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function normalizeBaseUrl(value) {

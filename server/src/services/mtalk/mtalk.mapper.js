@@ -7,6 +7,7 @@
 
 const { normalizeQueueName } = require("../queue-filter");
 const { normalizeAttendantName } = require("../attendant-filter");
+const { EMPTY_CATALOG, collectTicketTagNames } = require("./mtalk.tags");
 
 // A API devolve datas em UTC (ISO 8601) e o painel do MTalk mostra em BRT.
 const DISPLAY_TIME_ZONE = "America/Sao_Paulo";
@@ -20,7 +21,11 @@ const displayTimeFormatter = new Intl.DateTimeFormat("pt-BR", {
 });
 
 // Devolve null quando o ticket esta fora das filas monitoradas.
-function mapApiTicket(apiTicket, { now = new Date() } = {}) {
+//
+// tagCatalog e contactTags vem do coletor: o catalogo de /tags/list resolve os
+// vinculos que chegam so com o id, e contactTags carrega as TAGs do cliente
+// quando a listagem de tickets nao as devolveu.
+function mapApiTicket(apiTicket, { now = new Date(), tagCatalog = EMPTY_CATALOG, contactTags = [] } = {}) {
   const queue = normalizeQueueName(apiTicket?.queue?.name || "");
   if (!queue) {
     return null;
@@ -31,7 +36,8 @@ function mapApiTicket(apiTicket, { now = new Date() } = {}) {
     return null;
   }
 
-  const tags = extractTagNames(apiTicket?.tags);
+  // TAG do atendimento E TAG do cliente: as duas tiram o ticket do alerta.
+  const tags = collectTicketTagNames(apiTicket, tagCatalog, contactTags);
   const lastActivityAt = parseDate(apiTicket?.updatedAt) || parseDate(apiTicket?.createdAt);
 
   return {
@@ -67,18 +73,6 @@ function dedupeApiTickets(apiTickets) {
     seen.add(id);
     return true;
   });
-}
-
-function extractTagNames(tags) {
-  if (!Array.isArray(tags)) {
-    return [];
-  }
-
-  return tags
-    .map((tag) => cleanText(typeof tag === "string" ? tag : tag?.name, 120))
-    .filter(Boolean)
-    .filter((name, index, names) => names.indexOf(name) === index)
-    .slice(0, 10);
 }
 
 // O nome vem do cadastro do usuario, entao nao ha lixo de tela para descartar:

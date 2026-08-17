@@ -168,9 +168,10 @@ Verifique, nesta ordem:
 
 - O content script roda apenas em `https://s11.mtalk.com.br/tickets*`.
 - A leitura vem da **API oficial do MTalk**, nao do DOM. `extension/src/mtalk-api.js` chama o backend do proprio painel usando o token da sessao ja aberta (`localStorage["token"]`), entao nao ha segredo novo para configurar nem CORS envolvido.
-- A cada 1 minuto sao **2 requisicoes**: `GET /backend/tickets?status=open` e `...?status=pending`. A lista de filas (`GET /backend/queue`) e consultada 1x a cada 10 minutos e fica em cache. Nao ha nenhuma chamada por ticket.
+- A cada 1 minuto sao **2 requisicoes**: `GET /backend/tickets?status=open` e `...?status=pending`. A lista de filas (`GET /backend/queue`) e o catalogo de TAGs (`GET /backend/tags/list`) sao consultados 1x a cada 10 minutos e ficam em cache.
 - A verificacao considera apenas as filas monitoradas: `Suporte-TerraNet`, `Suporte-PLANET`, `Suporte-MIX`, `Suporte-IDEZ`, `Suporte-BDG` e `Suporte-AIA`, filtradas ja na propria consulta (`queueIds`).
-- Um ticket conta como `COM_TAG` quando tem qualquer tag registrada em `tags[]` — nao ha mais heuristica de aparencia para adivinhar o que e uma TAG.
+- Um ticket conta como `COM_TAG` quando ha TAG vinculada **ao atendimento (`ticket.tags[]`) ou ao cliente (`ticket.contact.tags[]`)** — as duas tiram o ticket do alerta, que e como o atendente ve no painel. O catalogo `GET /backend/tags/list` da nome ao vinculo que chega so com o id e descarta vinculo de TAG ja excluida.
+- Quando a instancia nao devolve as TAGs do contato na listagem, o monitor consulta `GET /backend/contacts/{id}` — so para ticket que continuaria no alerta e no maximo 20 vezes por ciclo (`MTALK_MAX_CONTACT_LOOKUPS`, `0` desliga).
 - A inatividade sai da diferenca real entre `updatedAt` do ticket e o horario da leitura, e nao mais de um `HH:mm` lido da tela.
 - Tickets sem TAG geram um alerta visual: `Registre a TAG do cliente`. Clicar no item abre o ticket (`/tickets/<uuid>`).
 - O service worker envia o snapshot para `POST /api/tickets/snapshot`.
@@ -310,7 +311,7 @@ A migration `005_mtalk_api.sql` adiciona as colunas que so existem na leitura pe
 
 ## Seguranca e LGPD
 
-O projeto coleta apenas dados necessarios para o relatorio de TAG: cliente, fila, atendente, conexao, horario, TAG/status, URL e data de leitura. Com a leitura pela API oficial entram tambem os identificadores do ticket (id, uuid, status) e a contagem de mensagens nao lidas. Ele **nao le o conteudo das mensagens**: o unico endpoint consultado e a listagem de tickets (`GET /backend/tickets`), nunca `GET /backend/messages/{ticketId}`.
+O projeto coleta apenas dados necessarios para o relatorio de TAG: cliente, fila, atendente, conexao, horario, TAG/status, URL e data de leitura. Com a leitura pela API oficial entram tambem os identificadores do ticket (id, uuid, status) e a contagem de mensagens nao lidas. Ele **nao le o conteudo das mensagens**: os endpoints consultados sao a listagem de tickets (`GET /backend/tickets`), o cadastro de filas (`GET /backend/queue`), o catalogo de TAGs (`GET /backend/tags/list`) e, quando a listagem nao traz as TAGs do cliente, o cadastro do contato (`GET /backend/contacts/{id}`) — nunca `GET /backend/messages/{ticketId}`.
 
 O token da sessao do MTalk e usado apenas dentro da propria pagina do painel, no header `Authorization` das chamadas ao proprio MTalk — ele nunca e enviado para a API deste projeto nem gravado no banco. O painel usa JWT, a API aplica rate limit, valida payloads e evita logar dados sensiveis.
 

@@ -11,7 +11,10 @@
   const ONE_MINUTE_MS = 60 * 1000;
   const ALERT_SNOOZE_MS = 5 * ONE_MINUTE_MS;
   const ALERT_ROOT_ID = "mcall-ticket-tag-alert-root";
-  const READER_VERSION = "2.0.0-api";
+  // 2.1: a TAG passou a ser lida tambem do cliente (contact.tags), nao so do
+  // atendimento. A versao aparece no popup e serve para saber quais maquinas ja
+  // recarregaram a extensao.
+  const READER_VERSION = "2.1.0-api";
 
   const api = window.McallMtalkApi;
   const INACTIVITY_THRESHOLD_MINUTES = api?.INACTIVITY_THRESHOLD_MINUTES ?? 15;

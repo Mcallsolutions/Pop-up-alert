@@ -38,6 +38,28 @@ async function listTickets({ token, config = getMtalkConfig(), status, pageNumbe
   };
 }
 
+// GET /backend/tags/list -> catalogo oficial de TAGs da empresa.
+// Serve para dar nome ao vinculo que chega so com o id da TAG e para descartar
+// vinculo apontando para TAG que ja foi excluida do cadastro.
+// Resposta: array de { id, name, color, kanban }; algumas versoes embrulham
+// em { tags }.
+async function listTags({ token, config = getMtalkConfig() } = {}) {
+  const data = await requestMtalk("/tags/list", { token, config });
+  return Array.isArray(data) ? data : toArray(data?.tags);
+}
+
+// GET /backend/contacts/{id} -> cadastro do contato, com as TAGs vinculadas.
+// Usado so como segunda tentativa, quando a listagem de tickets nao traz as
+// TAGs do contato (ver mtalk.tags.contactIdForTagLookup).
+async function getContact({ token, config = getMtalkConfig(), contactId } = {}) {
+  const id = String(contactId ?? "").trim();
+  if (!id) {
+    return null;
+  }
+
+  return requestMtalk(`/contacts/${encodeURIComponent(id)}`, { token, config });
+}
+
 async function getCurrentUser({ token, config = getMtalkConfig() } = {}) {
   return requestMtalk("/auth/me", { token, config });
 }
@@ -105,7 +127,9 @@ function buildError(message, statusCode) {
 }
 
 module.exports = {
+  getContact,
   getCurrentUser,
   listQueues,
+  listTags,
   listTickets
 };
