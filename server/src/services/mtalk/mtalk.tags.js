@@ -10,7 +10,8 @@
 //
 // O catalogo oficial (GET /backend/tags/list) entra por dois motivos: resolve o
 // vinculo que vem so com o id da TAG (sem o nome junto) e descarta id de TAG que
-// nao existe mais no cadastro.
+// nao existe mais no cadastro. Como a listagem costuma trazer a TAG ja com o
+// nome, ele so e consultado quando needsTagCatalog encontra um vinculo sem nome.
 
 const MAX_TAGS_PER_TICKET = 10;
 const MAX_TAG_NAME = 120;
@@ -69,6 +70,34 @@ function contactIdForTagLookup(apiTicket) {
   }
 
   return toId(contact?.id ?? apiTicket?.contactId);
+}
+
+// O catalogo so muda o resultado quando um vinculo chega SEM nome: so o id, ou a
+// linha de ligacao ({ tagId }). Vinculo com nome nunca consulta o catalogo (ver
+// resolveTagName), entao sem nenhum desses nao ha motivo para ler /tags/list.
+function needsTagCatalog(values) {
+  return toArray(values).some(isUnnamedTagReference);
+}
+
+function ticketNeedsTagCatalog(apiTicket) {
+  return [apiTicket?.tags, apiTicket?.contact?.tags, apiTicket?.contact?.contactTags].some(needsTagCatalog);
+}
+
+function isUnnamedTagReference(value) {
+  if (typeof value === "number") {
+    return toId(value) > 0;
+  }
+
+  if (typeof value === "string") {
+    return /^\d+$/.test(cleanText(value, MAX_TAG_NAME));
+  }
+
+  if (value && typeof value === "object") {
+    const name = cleanText(value.name ?? value.tag?.name ?? value.tagName, MAX_TAG_NAME);
+    return !name && toId(value.tagId ?? value.tag?.id ?? value.id) > 0;
+  }
+
+  return false;
 }
 
 // Valores crus de TAG de um cadastro de contato (GET /backend/contacts/{id}).
@@ -145,9 +174,10 @@ function cleanText(value, maxLength) {
 
 module.exports = {
   EMPTY_CATALOG,
-  MAX_TAGS_PER_TICKET,
   buildTagCatalog,
   collectTicketTagNames,
   contactIdForTagLookup,
-  contactTagValues
+  contactTagValues,
+  needsTagCatalog,
+  ticketNeedsTagCatalog
 };

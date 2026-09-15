@@ -1,6 +1,5 @@
 const form = document.getElementById("optionsForm");
 const apiBaseUrl = document.getElementById("apiBaseUrl");
-const extensionToken = document.getElementById("extensionToken");
 const feedback = document.getElementById("feedback");
 
 document.addEventListener("DOMContentLoaded", loadConfig);
@@ -12,19 +11,12 @@ async function loadConfig() {
     feedback.textContent = response?.error || "Nao foi possivel carregar as opcoes";
     return;
   }
-  apiBaseUrl.value = response.config.apiBaseUrl || "https://pop-up-alert.vercel.app";
-  extensionToken.value = response.config.extensionToken || "";
+  apiBaseUrl.value = response.config.apiBaseUrl || "http://localhost:3333";
 }
 
 async function saveConfig(event) {
   event.preventDefault();
-  const response = await sendMessage({
-    type: "SAVE_CONFIG",
-    config: {
-      apiBaseUrl: apiBaseUrl.value,
-      extensionToken: extensionToken.value
-    }
-  });
+  const response = await sendMessage({ type: "SAVE_CONFIG", config: { apiBaseUrl: apiBaseUrl.value } });
   feedback.textContent = response?.ok ? "Configuracao salva." : response?.error || "Erro ao salvar configuracao";
 }
 

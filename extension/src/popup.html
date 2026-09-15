@@ -16,7 +16,7 @@
         <span id="apiBadge" class="badge badge-muted">API</span>
       </header>
 
-      <section class="metrics" aria-label="Ultima leitura">
+      <section class="metrics" aria-label="Ultima coleta">
         <div>
           <span>Tickets</span>
           <strong id="totalTickets">0</strong>
@@ -26,8 +26,8 @@
           <strong id="missingTags">0</strong>
         </div>
         <div>
-          <span>Com TAG</span>
-          <strong id="withTags">0</strong>
+          <span>Inativos</span>
+          <strong id="inactiveTickets">0</strong>
         </div>
         <div>
           <span>Aguardando</span>
@@ -37,24 +37,16 @@
 
       <dl class="status-list">
         <div>
-          <dt>Ultima leitura</dt>
-          <dd id="lastReadAt">-</dd>
+          <dt>Ultima coleta</dt>
+          <dd id="collectedAt">-</dd>
         </div>
         <div>
-          <dt>Ultimo envio</dt>
-          <dd id="lastSentAt">-</dd>
+          <dt>Ultima consulta</dt>
+          <dd id="lastFetchAt">-</dd>
         </div>
         <div>
-          <dt>URL</dt>
-          <dd id="currentUrl">-</dd>
-        </div>
-        <div>
-          <dt>Leitura (API)</dt>
-          <dd id="captureStatus">-</dd>
-        </div>
-        <div>
-          <dt>Diagnostico</dt>
-          <dd id="parserMessage">-</dd>
+          <dt>Situacao</dt>
+          <dd id="situation">-</dd>
         </div>
         <div id="errorRow" hidden>
           <dt>Erro</dt>
@@ -63,18 +55,14 @@
       </dl>
 
       <div class="actions">
-        <button id="forceScan" type="button">Forcar leitura</button>
+        <button id="forceCollect" type="button">Coletar agora</button>
         <button id="checkApi" type="button" class="secondary">Testar API</button>
       </div>
 
       <form id="configForm" class="config">
         <label>
           URL da API
-          <input id="apiBaseUrl" name="apiBaseUrl" type="url" placeholder="https://pop-up-alert.vercel.app" />
-        </label>
-        <label>
-          Token da extensao
-          <input id="extensionToken" name="extensionToken" type="password" autocomplete="off" />
+          <input id="apiBaseUrl" name="apiBaseUrl" type="url" placeholder="http://localhost:3333" />
         </label>
         <button type="submit">Salvar configuracao</button>
       </form>

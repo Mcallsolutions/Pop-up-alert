@@ -104,7 +104,7 @@ async function createPrompt(payload) {
       `INSERT INTO ai_prompts (title, kind, content, is_active, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`
     )
-    .run(prompt.title, prompt.kind, prompt.content, prompt.isActive ? 1 : 0, now, now, { returning: "id" });
+    .run(prompt.title, prompt.kind, prompt.content, prompt.isActive ? 1 : 0, now, now);
 
   return getPrompt(result.lastInsertRowid);
 }
@@ -175,7 +175,7 @@ async function getStatus() {
 
 // Monta o contexto a partir dos MESMOS relatorios que o painel exibe, aplica os
 // prompts cadastrados e guarda o JSON devolvido pela IA.
-async function generateSummary(filters = {}, user = null) {
+async function generateSummary(filters = {}) {
   if (!isOpenAiConfigured()) {
     throwValidation("OPENAI_API_KEY nao configurada. Cadastre a chave no ambiente antes de gerar o resumo.", 503);
   }
@@ -194,17 +194,16 @@ async function generateSummary(filters = {}, user = null) {
     content: completion.json,
     model: completion.model,
     usage: completion.usage,
-    filters: cleanFilters(filters),
-    createdBy: user?.email || user?.name || null
+    filters: cleanFilters(filters)
   });
 }
 
-async function saveSummary({ content, model, usage, filters, createdBy }) {
+async function saveSummary({ content, model, usage, filters }) {
   const database = await getDatabase();
   const result = await database
     .prepare(
-      `INSERT INTO ai_summaries (model, filters, content, prompt_tokens, completion_tokens, total_tokens, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ai_summaries (model, filters, content, prompt_tokens, completion_tokens, total_tokens, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       model,
@@ -213,9 +212,7 @@ async function saveSummary({ content, model, usage, filters, createdBy }) {
       usage?.promptTokens || 0,
       usage?.completionTokens || 0,
       usage?.totalTokens || 0,
-      createdBy,
-      new Date().toISOString(),
-      { returning: "id" }
+      new Date().toISOString()
     );
 
   return getSummaryById(result.lastInsertRowid);
@@ -226,7 +223,7 @@ async function getSummaryById(id) {
   const row = await database
     .prepare(
       `SELECT id, model, filters, content, prompt_tokens AS "promptTokens", completion_tokens AS "completionTokens",
-              total_tokens AS "totalTokens", created_by AS "createdBy", created_at AS "createdAt"
+              total_tokens AS "totalTokens", created_at AS "createdAt"
        FROM ai_summaries
        WHERE id = ?`
     )
@@ -240,7 +237,7 @@ async function getLatestSummary() {
   const row = await database
     .prepare(
       `SELECT id, model, filters, content, prompt_tokens AS "promptTokens", completion_tokens AS "completionTokens",
-              total_tokens AS "totalTokens", created_by AS "createdBy", created_at AS "createdAt"
+              total_tokens AS "totalTokens", created_at AS "createdAt"
        FROM ai_summaries
        ORDER BY datetime(created_at) DESC, id DESC
        LIMIT 1`
@@ -256,7 +253,7 @@ async function listSummaries(limit = 10) {
   const rows = await database
     .prepare(
       `SELECT id, model, filters, content, prompt_tokens AS "promptTokens", completion_tokens AS "completionTokens",
-              total_tokens AS "totalTokens", created_by AS "createdBy", created_at AS "createdAt"
+              total_tokens AS "totalTokens", created_at AS "createdAt"
        FROM ai_summaries
        ORDER BY datetime(created_at) DESC, id DESC
        LIMIT ?`
@@ -413,7 +410,6 @@ function normalizeSummaryRow(row) {
       completionTokens: Number(row.completionTokens || 0),
       totalTokens: Number(row.totalTokens || 0)
     },
-    createdBy: row.createdBy || null,
     createdAt: row.createdAt
   };
 }

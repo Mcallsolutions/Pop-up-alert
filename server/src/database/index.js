@@ -1,4 +1,15 @@
-const bcrypt = require("bcryptjs");
+// Banco local em SQLite (modulo node:sqlite, embutido no Node 22.5+), sem
+// servidor de banco para instalar.
+//
+// Os servicos usam uma interface assincrona (prepare().get/all/run e
+// transaction) para nao depender do driver. As chamadas ao SQLite sao
+// sincronas por baixo, entao uma transacao nunca intercala comandos de outra
+// requisicao: nao ha I/O entre o BEGIN e o COMMIT.
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+const DEFAULT_DATABASE_PATH = path.resolve(__dirname, "../../data/monitor.sqlite");
 
 let initializationPromise;
 
@@ -9,11 +20,7 @@ async function getDatabase() {
 async function initializeDatabase() {
   if (!initializationPromise) {
     initializationPromise = Promise.resolve()
-      .then(async () => {
-        const database = createPostgresDatabase();
-        await database.initialize();
-        return database;
-      })
+      .then(() => createSqliteDatabase(getDatabasePath()))
       .catch((error) => {
         initializationPromise = undefined;
         throw error;
@@ -23,282 +30,167 @@ async function initializeDatabase() {
   return initializationPromise;
 }
 
-function isServerless() {
-  return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+function getDatabasePath() {
+  const configured = String(process.env.SQLITE_PATH || "").trim();
+  return configured ? path.resolve(process.cwd(), configured) : DEFAULT_DATABASE_PATH;
 }
 
-function createPostgresDatabase() {
-  const { Pool } = require("pg");
-  const connectionString = getPostgresUrl();
+function createSqliteDatabase(filename) {
+  const { DatabaseSync } = require("node:sqlite");
 
-  if (!connectionString) {
-    throw new Error(
-      "DATABASE_URL ou POSTGRES_URL precisa ser configurado. Na Vercel, conecte um Postgres em Storage; " +
-        "no ambiente local, aponte para um Postgres proprio."
-    );
-  }
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  const connection = new DatabaseSync(filename);
 
-  const pool = new Pool({
-    connectionString,
-    ssl: getPostgresSslConfig(connectionString),
-    // Em serverless cada instancia atende uma requisicao por vez, entao manter
-    // um pool grande so consome conexoes do banco a toa.
-    max: isServerless() ? 1 : 10,
-    idleTimeoutMillis: isServerless() ? 5000 : 10000,
-    connectionTimeoutMillis: 10000
-  });
+  connection.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA foreign_keys = ON;
+    PRAGMA busy_timeout = 5000;
+  `);
 
-  pool.on("error", (error) => {
-    console.error("[DB] Erro no pool do PostgreSQL:", error.message);
-  });
-
-  const createQueryableDatabase = (queryable) => ({
-    client: "postgres",
-    async initialize() {
-      await runMigrations(this);
-      await seedAdmin(this);
-    },
+  const database = {
+    client: "sqlite",
+    filename,
     prepare(sql) {
+      const statement = connection.prepare(sql);
       return {
         async get(...args) {
-          const { params } = splitArgs(args);
-          const result = await queryable.query(toPostgresSql(sql), params);
-          return result.rows[0] || null;
+          return statement.get(...toParams(args)) || null;
         },
         async all(...args) {
-          const { params } = splitArgs(args);
-          const result = await queryable.query(toPostgresSql(sql), params);
-          return result.rows;
+          return statement.all(...toParams(args));
         },
         async run(...args) {
-          const { params, options } = splitArgs(args);
-          const result = await queryable.query(addReturning(toPostgresSql(sql), options.returning), params);
-          const row = result.rows[0] || {};
+          const result = statement.run(...toParams(args));
           return {
-            changes: result.rowCount,
-            lastInsertRowid: row.id,
-            row
+            changes: Number(result.changes || 0),
+            lastInsertRowid: Number(result.lastInsertRowid || 0)
           };
         }
       };
     },
     async exec(sql) {
-      await queryable.query(sql);
+      connection.exec(sql);
     },
     async transaction(callback) {
-      const client = await pool.connect();
-      const transactionDatabase = createQueryableDatabase(client);
-
+      connection.exec("BEGIN");
       try {
-        await client.query("BEGIN");
-        const result = await callback(transactionDatabase);
-        await client.query("COMMIT");
+        const result = await callback(database);
+        connection.exec("COMMIT");
         return result;
       } catch (error) {
-        await client.query("ROLLBACK");
+        connection.exec("ROLLBACK");
         throw error;
-      } finally {
-        client.release();
       }
+    },
+    close() {
+      connection.close();
     }
-  });
+  };
 
-  return createQueryableDatabase(pool);
+  runMigrations(connection);
+  return database;
 }
 
-async function runMigrations(database) {
-  await database.exec(`
+// O driver nao aceita undefined nem boolean.
+function toParams(args) {
+  return args.map((value) => {
+    if (value === undefined) return null;
+    if (typeof value === "boolean") return value ? 1 : 0;
+    return value;
+  });
+}
+
+// Roda na conexao crua (sincrona), antes de a API aceitar requisicoes.
+function runMigrations(connection) {
+  connection.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       filename TEXT PRIMARY KEY,
-      applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
-  const hasMigration = database.prepare("SELECT 1 AS found FROM schema_migrations WHERE filename = ?");
+  const hasMigration = connection.prepare("SELECT 1 AS found FROM schema_migrations WHERE filename = ?");
+  const register = connection.prepare("INSERT INTO schema_migrations (filename) VALUES (?)");
 
   for (const [filename, sql] of Object.entries(MIGRATIONS)) {
-    if (await hasMigration.get(filename)) {
+    if (hasMigration.get(filename)) {
       continue;
     }
 
-    await database.transaction(async (transaction) => {
-      await transaction.exec(sql);
-      await transaction.prepare("INSERT INTO schema_migrations (filename) VALUES (?)").run(filename);
-    });
+    connection.exec("BEGIN");
+    try {
+      connection.exec(sql);
+      register.run(filename);
+      connection.exec("COMMIT");
+    } catch (error) {
+      connection.exec("ROLLBACK");
+      throw error;
+    }
   }
 }
 
-// As variaveis de ambiente sao a unica fonte da credencial do painel — nao ha
-// tela para trocar a senha. Por isso o seed nao pode so criar o admin: ele
-// tambem re-sincroniza nome e senha quando ADMIN_* muda entre deploys. Sem
-// isso, trocar ADMIN_PASSWORD nao surtia efeito algum e o login continuava
-// respondendo "Credenciais invalidas" com a senha nova.
-async function seedAdmin(activeDatabase) {
-  const email = String(process.env.ADMIN_EMAIL || "admin@mcall.local").trim().toLowerCase();
-  const name = process.env.ADMIN_NAME || "Administrador";
-  const password = process.env.ADMIN_PASSWORD || "admin123";
-  const existing = await activeDatabase
-    .prepare('SELECT id, name, password_hash AS "passwordHash" FROM admins WHERE email = ?')
-    .get(email);
-
-  if (!existing) {
-    await activeDatabase
-      .prepare("INSERT INTO admins (email, name, password_hash) VALUES (?, ?, ?)")
-      .run(email, name, bcrypt.hashSync(password, 10));
-    console.log(`[DB] Admin ${email} criado a partir das variaveis ADMIN_*.`);
-    return;
-  }
-
-  // O hash muda a cada chamada de hashSync (salt aleatorio), entao a comparacao
-  // e feita contra o hash gravado — assim so ha escrita quando a senha mudou.
-  const senhaMudou = !bcrypt.compareSync(password, existing.passwordHash);
-  const nomeMudou = existing.name !== name;
-
-  if (!senhaMudou && !nomeMudou) {
-    return;
-  }
-
-  await activeDatabase
-    .prepare("UPDATE admins SET name = ?, password_hash = ? WHERE id = ?")
-    .run(name, senhaMudou ? bcrypt.hashSync(password, 10) : existing.passwordHash, existing.id);
-
-  console.log(`[DB] Admin ${email} atualizado a partir das variaveis ADMIN_* (senha: ${senhaMudou ? "trocada" : "mantida"}).`);
-}
-
-function getPostgresUrl() {
-  return (
-    process.env.DATABASE_URL ||
-    process.env.POSTGRES_URL ||
-    process.env.POSTGRES_PRISMA_URL ||
-    process.env.POSTGRES_URL_NON_POOLING ||
-    ""
-  );
-}
-
-function getPostgresSslConfig(connectionString) {
-  if (String(process.env.PGSSLMODE || "").toLowerCase() === "disable") {
-    return false;
-  }
-
-  if (/localhost|127\.0\.0\.1/i.test(connectionString)) {
-    return false;
-  }
-
-  return { rejectUnauthorized: false };
-}
-
-function splitArgs(args) {
-  const values = [...args];
-  const options = isRunOptions(values[values.length - 1]) ? values.pop() : {};
-  const params = values.length === 1 && Array.isArray(values[0]) ? values[0] : values;
-  return { params, options };
-}
-
-function isRunOptions(value) {
-  return Boolean(
-    value &&
-      typeof value === "object" &&
-      !Array.isArray(value) &&
-      Object.prototype.hasOwnProperty.call(value, "returning")
-  );
-}
-
-// As consultas sao escritas com "?" e convertidas para os placeholders
-// numerados do PostgreSQL na hora de executar.
-function toPostgresSql(sql) {
-  let parameterIndex = 0;
-  return String(sql)
-    .replace(/\?/g, () => `$${++parameterIndex}`)
-    .replace(/\bdatetime\(([^)]+)\)/gi, "($1::timestamptz)");
-}
-
-function addReturning(sql, returning) {
-  if (!returning || /\bRETURNING\b/i.test(sql)) {
-    return sql;
-  }
-
-  return `${String(sql).replace(/;+\s*$/, "")} RETURNING ${returning}`;
-}
-
+// Para adicionar uma migration, crie uma nova chave — nunca edite uma que ja
+// rodou.
 const MIGRATIONS = {
-  "001_init.sql": `
-    CREATE TABLE IF NOT EXISTS admins (
-      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-      email TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
-    );
-
+  "001_schema.sql": `
     CREATE TABLE IF NOT EXISTS snapshots (
-      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
       source TEXT NOT NULL,
       source_url TEXT NOT NULL,
       collected_at TEXT NOT NULL,
       total_tickets INTEGER NOT NULL DEFAULT 0,
       total_with_tag INTEGER NOT NULL DEFAULT 0,
       total_without_tag INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- Uma linha por ticket por coleta. external_ticket_id e o id do ticket no
+    -- MTalk; os relatorios mantem so a leitura mais recente de cada um.
     CREATE TABLE IF NOT EXISTS tickets (
-      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-      snapshot_id INTEGER NOT NULL,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      snapshot_id INTEGER NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE,
+      external_ticket_id TEXT NOT NULL,
+      ticket_uuid TEXT,
+      ticket_status TEXT,
       client_name TEXT,
       queue_name TEXT,
       attendant TEXT,
       company TEXT,
       display_time TEXT,
+      last_message_at TEXT,
+      unread_messages INTEGER,
+      inactivity_minutes INTEGER,
       tag TEXT,
+      tags TEXT,
       tag_status TEXT NOT NULL CHECK (tag_status IN ('COM_TAG', 'SEM_TAG')),
       source_url TEXT NOT NULL,
       collected_at TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text),
-      FOREIGN KEY (snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE INDEX IF NOT EXISTS idx_tickets_tag_status ON tickets(tag_status);
-    CREATE INDEX IF NOT EXISTS idx_tickets_collected_at ON tickets(collected_at);
-    CREATE INDEX IF NOT EXISTS idx_tickets_attendant ON tickets(attendant);
-    CREATE INDEX IF NOT EXISTS idx_tickets_queue_name ON tickets(queue_name);
-    CREATE INDEX IF NOT EXISTS idx_tickets_company ON tickets(company);
     CREATE INDEX IF NOT EXISTS idx_snapshots_collected_at ON snapshots(collected_at);
-  `,
-  "002_ticket_key.sql": `
-    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS ticket_key TEXT;
-
-    UPDATE tickets
-    SET ticket_key =
-      lower(trim(coalesce(client_name, ''))) || '|' ||
-      lower(trim(coalesce(queue_name, ''))) || '|' ||
-      lower(trim(coalesce(attendant, ''))) || '|' ||
-      lower(trim(coalesce(company, ''))) || '|' ||
-      lower(trim(coalesce(display_time, '')))
-    WHERE ticket_key IS NULL OR ticket_key = '';
-
-    CREATE INDEX IF NOT EXISTS idx_tickets_ticket_key ON tickets(ticket_key);
-    CREATE INDEX IF NOT EXISTS idx_tickets_key_collected_at ON tickets(ticket_key, collected_at);
-  `,
-  "003_inactivity_minutes.sql": `
-    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS inactivity_minutes INTEGER;
-
+    CREATE INDEX IF NOT EXISTS idx_tickets_collected_at ON tickets(collected_at);
+    CREATE INDEX IF NOT EXISTS idx_tickets_external_collected_at ON tickets(external_ticket_id, collected_at);
+    CREATE INDEX IF NOT EXISTS idx_tickets_queue_name ON tickets(queue_name);
+    CREATE INDEX IF NOT EXISTS idx_tickets_attendant ON tickets(attendant);
+    CREATE INDEX IF NOT EXISTS idx_tickets_company ON tickets(company);
+    CREATE INDEX IF NOT EXISTS idx_tickets_tag_status ON tickets(tag_status);
     CREATE INDEX IF NOT EXISTS idx_tickets_inactivity_minutes ON tickets(inactivity_minutes);
-  `,
-  "004_ai.sql": `
+
     CREATE TABLE IF NOT EXISTS ai_prompts (
-      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT NOT NULL,
       kind TEXT NOT NULL CHECK (kind IN ('INSTRUCAO', 'TREINAMENTO')),
       content TEXT NOT NULL,
       is_active INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text),
-      updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE INDEX IF NOT EXISTS idx_ai_prompts_kind ON ai_prompts(kind, is_active);
 
     CREATE TABLE IF NOT EXISTS ai_summaries (
-      id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
       model TEXT,
       filters TEXT,
       content TEXT NOT NULL,
@@ -306,23 +198,10 @@ const MIGRATIONS = {
       completion_tokens INTEGER,
       total_tokens INTEGER,
       created_by TEXT,
-      created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP::text)
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE INDEX IF NOT EXISTS idx_ai_summaries_created_at ON ai_summaries(created_at);
-  `,
-  // Campos que so existem quando a leitura vem da API oficial do MTalk. Ficam
-  // nulos nos registros antigos, gravados pela leitura de tela.
-  "005_mtalk_api.sql": `
-    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS external_ticket_id TEXT;
-    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS ticket_uuid TEXT;
-    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS ticket_status TEXT;
-    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS last_message_at TEXT;
-    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS unread_messages INTEGER;
-    ALTER TABLE tickets ADD COLUMN IF NOT EXISTS tags TEXT;
-
-    CREATE INDEX IF NOT EXISTS idx_tickets_external_ticket_id ON tickets(external_ticket_id);
-    CREATE INDEX IF NOT EXISTS idx_tickets_external_collected_at ON tickets(external_ticket_id, collected_at);
   `
 };
 
@@ -334,8 +213,8 @@ module.exports = {
 if (require.main === module) {
   require("dotenv").config();
   initializeDatabase()
-    .then(() => {
-      console.log("Banco inicializado com sucesso.");
+    .then((database) => {
+      console.log(`Banco inicializado com sucesso em ${database.filename}.`);
     })
     .catch((error) => {
       console.error(error);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import FilterBar, { emptyFilters } from "../../components/FilterBar";
 import { api } from "../../services/api";
@@ -115,8 +115,8 @@ export default function Reports() {
 
       {hiddenCount ? (
         <p className="notice">
-          {hiddenCount} {hiddenCount === 1 ? "registro foi ocultado" : "registros foram ocultados"}: a leitura do MTalk
-          reconheceu apenas a fila, sem identificar o cliente.
+          {hiddenCount} {hiddenCount === 1 ? "ticket foi ocultado" : "tickets foram ocultados"}: o contato esta sem nome
+          no cadastro do MTalk.
         </p>
       ) : null}
 

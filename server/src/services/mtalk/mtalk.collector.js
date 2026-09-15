@@ -1,75 +1,98 @@
-// Coleta os tickets pela API oficial do MTalk e grava um snapshot.
+// Coleta os tickets pela API oficial do MTalk, grava o snapshot e guarda a
+// ultima leitura em memoria para os alertas (GET /api/alerts).
 //
-// Custo por coleta (o objetivo e manter isso baixo):
-//   - 1 chamada GET /queue a cada MTALK_QUEUE_CACHE_MINUTES (padrao 10 min);
-//   - 1 chamada GET /tags/list a cada MTALK_TAG_CACHE_MINUTES (padrao 10 min);
-//   - 1 chamada GET /tickets por status monitorado (padrao "open" e "pending");
+// O servidor e o unico lugar que conversa com o MTalk. Custo por coleta:
+//   - 1 chamada GET /tickets por status monitorado: "open" com showAll=true e
+//     "pending" sem ele, as duas ja filtradas por queueIds;
 //   - paginas extras so quando ha mais tickets que o tamanho de pagina;
-//   - no maximo MTALK_MAX_CONTACT_LOOKUPS chamadas GET /contacts/{id}, e so
-//     quando a listagem nao devolveu as TAGs do cliente (ver fillContactTags).
-// Fila, atendente, empresa e TAGs ja vem dentro da propria listagem.
+//   - 1 chamada GET /queue a cada MTALK_QUEUE_CACHE_MINUTES (padrao 60 min);
+//   - GET /tags/list so quando algum vinculo de TAG chega sem nome, e no maximo
+//     1 vez a cada MTALK_TAG_CACHE_MINUTES (padrao 10 min);
+//   - GET /contacts/{id} so para ticket que continuaria no alerta de TAG e cujo
+//     contato veio sem o campo de TAGs, com cache por contato e no maximo
+//     MTALK_MAX_CONTACT_LOOKUPS consultas novas por coleta.
+// A autenticacao (URL + token) fica em mtalk.client.js.
 
 const { MAX_TICKETS_PER_SNAPSHOT, getInactivityThresholdMinutes, getMtalkConfig } = require("../../config/monitoring");
 const { getAllowedQueues, normalizeQueueName } = require("../queue-filter");
 const { saveSnapshot } = require("../ticket.service");
-const { getContact, listQueues, listTags, listTickets } = require("./mtalk.client");
+const { toZonedIso } = require("../time-zone");
+const { describeSession, getContact, listQueues, listTags, listTickets } = require("./mtalk.client");
 const { dedupeApiTickets, mapApiTicket } = require("./mtalk.mapper");
-const { EMPTY_CATALOG, buildTagCatalog, contactIdForTagLookup, contactTagValues } = require("./mtalk.tags");
+const {
+  EMPTY_CATALOG,
+  buildTagCatalog,
+  contactIdForTagLookup,
+  contactTagValues,
+  needsTagCatalog,
+  ticketNeedsTagCatalog
+} = require("./mtalk.tags");
+
+// A aba de pendentes do painel do MTalk nao manda showAll: ticket aguardando ja
+// vem de todas as filas informadas em queueIds.
+const STATUSES_WITHOUT_SHOW_ALL = new Set(["pending"]);
+const MAX_ALERT_ITEMS = 6;
 
 let queueCache = { ids: [], expiresAt: 0, resolvedNames: [] };
 let tagCatalogCache = { catalog: EMPTY_CATALOG, expiresAt: 0 };
+// contactId -> { values, expiresAt }: TAGs lidas de GET /contacts/{id}.
+const contactTagCache = new Map();
 let useShowAll = true;
 
-async function collectFromMtalk({ token, persist = true } = {}) {
+// Estado do agendamento e da ultima leitura bem-sucedida.
+let schedulerTimer = null;
+let runningCollection = null;
+let lastCollection = null;
+let lastRun = { startedAt: null, finishedAt: null, ok: null, error: null, reason: null };
+
+async function collectFromMtalk({ persist = true } = {}) {
   const config = getMtalkConfig();
   const startedAt = Date.now();
   const now = new Date();
-  const requests = { queues: 0, tags: 0, tickets: 0, contacts: 0 };
+  const requests = { tickets: 0, queues: 0, tags: 0, contacts: 0 };
 
-  const [queues, tagCatalog] = await Promise.all([
-    resolveMonitoredQueues({ token, config, requests }),
-    resolveTagCatalog({ token, config, requests })
-  ]);
-  const apiTickets = await fetchMonitoredTickets({ token, config, queueIds: queues.ids, requests });
+  const queues = await resolveMonitoredQueues({ config, requests });
+  const apiTickets = await fetchMonitoredTickets({ config, queueIds: queues.ids, requests });
+  const uniqueTickets = dedupeApiTickets(apiTickets);
+
+  // A listagem costuma trazer a TAG com o nome; o catalogo so e lido quando
+  // algum vinculo chega apenas com o id.
+  const tagCatalog = uniqueTickets.some(ticketNeedsTagCatalog) ? await resolveTagCatalog({ config, requests }) : EMPTY_CATALOG;
 
   // O ticket cru anda junto do mapeado: fillContactTags precisa dos dois para
   // remapear so quem ainda parece sem TAG.
-  const mapeados = dedupeApiTickets(apiTickets)
-    .map((apiTicket) => ({ apiTicket, ticket: mapApiTicket(apiTicket, { now, tagCatalog }) }))
+  const mapOptions = { now, tagCatalog, panelUrl: config.panelUrl };
+  const mapeados = uniqueTickets
+    .map((apiTicket) => ({ apiTicket, ticket: mapApiTicket(apiTicket, mapOptions) }))
     .filter((item) => item.ticket);
 
-  await fillContactTags({ token, config, items: mapeados, tagCatalog, now, requests });
+  await fillContactTags({ config, items: mapeados, tagCatalog, now, requests });
 
   const monitorados = mapeados.map((item) => item.ticket);
-
-  // Truncar aqui e melhor do que ver o snapshot inteiro ser recusado por
-  // tamanho la na gravacao.
   const tickets = monitorados.slice(0, MAX_TICKETS_PER_SNAPSHOT);
   if (monitorados.length > tickets.length) {
     console.warn(`[MTalk] ${monitorados.length} tickets monitorados; gravando apenas os ${tickets.length} primeiros.`);
   }
 
   const threshold = getInactivityThresholdMinutes();
-  const payload = {
-    source: "mtalk-api",
-    url: `${config.panelUrl}/tickets`,
-    collectedAt: now.toISOString(),
-    tickets,
-    diagnostics: {
-      origem: "api-oficial",
-      filasResolvidas: queues.resolvedNames,
-      tagsCadastradas: tagCatalog.names.length,
-      contatosConsultados: requests.contacts,
-      ticketsRecebidos: apiTickets.length,
-      ticketsMonitorados: tickets.length,
-      requisicoes: requests.queues + requests.tags + requests.tickets + requests.contacts,
-      duracaoMs: Date.now() - startedAt
-    }
+  const collectedAt = toZonedIso(now);
+  const diagnostics = {
+    filasResolvidas: queues.resolvedNames,
+    ticketsRecebidos: apiTickets.length,
+    ticketsMonitorados: tickets.length,
+    requisicoes: requests.tickets + requests.queues + requests.tags + requests.contacts,
+    requisicoesPorEndpoint: {
+      "GET /tickets": requests.tickets,
+      "GET /queue": requests.queues,
+      "GET /tags/list": requests.tags,
+      "GET /contacts/{id}": requests.contacts
+    },
+    duracaoMs: Date.now() - startedAt
   };
 
   // Mesma divisao dos relatorios: TAG so conta onde ha atendente vinculado;
   // inatividade conta tudo, inclusive quem esta aguardando na fila.
-  const comResponsavel = tickets.filter((ticket) => String(ticket.attendant || "").trim());
+  const comResponsavel = tickets.filter(hasResponsible);
   const totals = {
     totalTickets: tickets.length,
     totalWithTag: comResponsavel.filter((ticket) => ticket.tagStatus === "COM_TAG").length,
@@ -78,26 +101,132 @@ async function collectFromMtalk({ token, persist = true } = {}) {
     totalInactive: tickets.filter((ticket) => Number(ticket.inactivityMinutes || 0) > threshold).length
   };
 
-  const saved = persist ? await saveSnapshot(payload) : null;
+  const saved = persist
+    ? await saveSnapshot({ source: "mtalk-api", url: `${config.panelUrl}/tickets`, collectedAt, tickets })
+    : null;
+
+  lastCollection = { collectedAt, thresholdMinutes: threshold, totals, diagnostics, tickets };
 
   return {
     ...totals,
     thresholdMinutes: threshold,
+    collectedAt,
     snapshot: saved,
-    diagnostics: payload.diagnostics,
+    diagnostics,
     tickets
   };
 }
 
-// Os ids das filas monitoradas mudam pouco, entao ficam em cache: sem isso
-// cada coleta gastaria uma chamada extra so para redescobrir os mesmos ids.
-async function resolveMonitoredQueues({ token, config, requests }) {
+// Uma coleta por vez: o disparo manual durante uma coleta agendada espera a
+// que ja esta em andamento em vez de dobrar as chamadas ao MTalk.
+function runCollection({ persist = true, reason = "agendada" } = {}) {
+  if (runningCollection) {
+    return runningCollection;
+  }
+
+  lastRun = { ...lastRun, startedAt: new Date().toISOString(), reason };
+  runningCollection = collectFromMtalk({ persist })
+    .then((result) => {
+      lastRun = { ...lastRun, finishedAt: new Date().toISOString(), ok: true, error: null };
+      return result;
+    })
+    .catch((error) => {
+      lastRun = { ...lastRun, finishedAt: new Date().toISOString(), ok: false, error: error.message };
+      throw error;
+    })
+    .finally(() => {
+      runningCollection = null;
+    });
+
+  return runningCollection;
+}
+
+function startCollector() {
+  const config = getMtalkConfig();
+
+  if (!config.isConfigured) {
+    console.warn("[MTalk] Coleta automatica desligada: defina MTALK_BASE_URL e MTALK_TOKEN no .env e reinicie a API.");
+    return false;
+  }
+
+  if (!config.collectIntervalMs) {
+    console.warn("[MTalk] Coleta automatica desligada (MTALK_COLLECT_INTERVAL_SECONDS=0).");
+    return false;
+  }
+
+  const tick = () =>
+    runCollection({ reason: "agendada" }).catch((error) => {
+      console.error("[MTalk] Falha na coleta:", error.message);
+    });
+
+  stopCollector();
+  tick();
+  schedulerTimer = setInterval(tick, config.collectIntervalMs);
+  console.log(`[MTalk] Coleta automatica a cada ${config.collectIntervalMs / 1000}s em ${config.baseUrl}.`);
+  return true;
+}
+
+function stopCollector() {
+  if (schedulerTimer) {
+    clearInterval(schedulerTimer);
+    schedulerTimer = null;
+  }
+}
+
+// Alertas da ultima leitura, no formato que o pop-up da extensao desenha.
+function getCurrentAlerts() {
+  const config = getMtalkConfig();
+  const collection = lastCollection;
+  const tickets = collection?.tickets || [];
+  const threshold = collection?.thresholdMinutes ?? getInactivityThresholdMinutes();
+  const identificados = tickets.filter((ticket) => String(ticket.clientName || "").trim());
+  // Ticket aguardando na fila nao tem a quem cobrar a TAG, mas continua no
+  // alerta de inatividade — mesma regra dos relatorios.
+  const missingTag = identificados.filter((ticket) => ticket.tagStatus === "SEM_TAG" && hasResponsible(ticket));
+  const inactive = identificados
+    .filter((ticket) => Number(ticket.inactivityMinutes || 0) > threshold)
+    .sort((a, b) => Number(b.inactivityMinutes || 0) - Number(a.inactivityMinutes || 0));
+  const ageMs = collection ? Date.now() - new Date(collection.collectedAt).getTime() : null;
+  // Leitura velha nao pode continuar gerando alerta como se fosse o agora.
+  const staleAfterMs = Math.max(config.collectIntervalMs * 3, 3 * 60 * 1000);
+
+  return {
+    collectedAt: collection?.collectedAt || null,
+    stale: ageMs === null || ageMs > staleAfterMs,
+    thresholdMinutes: threshold,
+    totals: collection?.totals || null,
+    lastError: lastRun.ok === false ? lastRun.error : null,
+    missingTag: { total: missingTag.length, items: missingTag.slice(0, MAX_ALERT_ITEMS).map(toAlertItem) },
+    inactive: { total: inactive.length, items: inactive.slice(0, MAX_ALERT_ITEMS).map(toAlertItem) }
+  };
+}
+
+function toAlertItem(ticket) {
+  return {
+    externalTicketId: ticket.externalTicketId,
+    ticketUuid: ticket.ticketUuid,
+    url: ticket.ticketUrl,
+    clientName: ticket.clientName,
+    queue: ticket.queue,
+    attendant: ticket.attendant,
+    company: ticket.company,
+    displayTime: ticket.displayTime,
+    inactivityMinutes: ticket.inactivityMinutes
+  };
+}
+
+function hasResponsible(ticket) {
+  return Boolean(String(ticket?.attendant || "").trim());
+}
+
+// Os ids das filas monitoradas mudam pouco, entao ficam em cache.
+async function resolveMonitoredQueues({ config, requests }) {
   if (queueCache.expiresAt > Date.now()) {
     return queueCache;
   }
 
   try {
-    const queues = await listQueues({ token, config });
+    const queues = await listQueues({ config });
     requests.queues += 1;
 
     const monitored = queues.filter((queue) => normalizeQueueName(queue?.name || ""));
@@ -107,6 +236,11 @@ async function resolveMonitoredQueues({ token, config, requests }) {
       expiresAt: Date.now() + config.queueCacheTtlMs
     };
   } catch (error) {
+    requests.queues += 1;
+    // Sessao recusada e credencial ausente derrubam a coleta inteira.
+    if (error.statusCode === 401 || error.statusCode === 503) {
+      throw error;
+    }
     // Sem a lista de filas a coleta continua: o filtro por nome no mapper faz
     // o mesmo recorte, so que descartando os tickets ja depois de recebidos.
     console.warn("[MTalk] Nao foi possivel listar as filas, seguindo sem filtro por fila:", error.message);
@@ -116,25 +250,23 @@ async function resolveMonitoredQueues({ token, config, requests }) {
   return queueCache;
 }
 
-// O catalogo de TAGs (GET /tags/list) da nome ao vinculo que a listagem manda
-// so com o id e permite descartar vinculo de TAG ja excluida. Fica em cache
-// como as filas: sao dados de cadastro, mudam raramente.
-async function resolveTagCatalog({ token, config, requests }) {
+// O catalogo de TAGs (GET /tags/list) da nome ao vinculo que chega so com o id
+// e permite descartar vinculo de TAG ja excluida.
+async function resolveTagCatalog({ config, requests }) {
   if (tagCatalogCache.expiresAt > Date.now()) {
     return tagCatalogCache.catalog;
   }
 
   try {
-    const tags = await listTags({ token, config });
+    const tags = await listTags({ config });
     requests.tags += 1;
     tagCatalogCache = {
       catalog: buildTagCatalog(tags),
       expiresAt: Date.now() + config.tagCacheTtlMs
     };
   } catch (error) {
-    // Sem o catalogo a coleta continua: as TAGs que vem com nome na listagem
-    // seguem valendo, e as que vem so com id contam como TAG sem nome — o que
-    // importa para o alerta e existir vinculo.
+    // Sem o catalogo a coleta continua: o que importa para o alerta e existir
+    // vinculo, nao o nome.
     requests.tags += 1;
     console.warn("[MTalk] Nao foi possivel ler o catalogo de TAGs (/tags/list):", error.message);
     tagCatalogCache = { catalog: EMPTY_CATALOG, expiresAt: Date.now() + 60000 };
@@ -145,56 +277,96 @@ async function resolveTagCatalog({ token, config, requests }) {
 
 // Segunda passada, so para os tickets que continuariam no alerta de TAG.
 //
-// Algumas instancias nao devolvem contact.tags dentro de GET /tickets. Nessas,
-// a TAG que o atendente vinculou ao CLIENTE nunca chegava aqui e o ticket
-// ficava preso no alerta. A consulta ao contato resolve, e o custo fica preso
-// em tres travas: so ticket sem TAG, so ticket com atendente, e no maximo
-// config.maxContactLookups chamadas por coleta.
-async function fillContactTags({ token, config, items, tagCatalog, now, requests }) {
+// Algumas instancias nao devolvem contact.tags dentro de GET /tickets; nelas a
+// TAG vinculada ao CLIENTE so aparece consultando o contato. O custo fica preso
+// em quatro travas: so ticket sem TAG, so ticket com atendente, cache por
+// contato e no maximo config.maxContactLookups consultas novas por coleta.
+async function fillContactTags({ config, items, tagCatalog, now, requests }) {
   if (!config.maxContactLookups) {
     return;
   }
 
-  const pendentes = items
-    .filter(
-      (item) =>
-        item.ticket.tagStatus === "SEM_TAG" &&
-        String(item.ticket.attendant || "").trim() &&
-        contactIdForTagLookup(item.apiTicket)
-    )
-    .slice(0, config.maxContactLookups);
+  pruneContactTagCache();
 
-  for (const item of pendentes) {
+  const candidatos = items.filter(
+    (item) => item.ticket.tagStatus === "SEM_TAG" && hasResponsible(item.ticket) && contactIdForTagLookup(item.apiTicket)
+  );
+
+  const comTagDoContato = [];
+  let consultasNovas = 0;
+
+  for (const item of candidatos) {
     const contactId = contactIdForTagLookup(item.apiTicket);
+    let values = readCachedContactTags(contactId);
 
-    try {
-      const contact = await getContact({ token, config, contactId });
-      requests.contacts += 1;
-
-      const contactTags = contactTagValues(contact);
-      if (!contactTags.length) {
+    if (!values) {
+      if (consultasNovas >= config.maxContactLookups) {
         continue;
       }
+      consultasNovas += 1;
 
-      item.ticket = mapApiTicket(item.apiTicket, { now, tagCatalog, contactTags }) || item.ticket;
-    } catch (error) {
-      // Erro aqui costuma ser do token ou da instancia (endpoint indisponivel),
-      // nao daquele contato: insistir nos demais so gastaria requisicao.
-      requests.contacts += 1;
-      console.warn(`[MTalk] Nao foi possivel ler as TAGs do contato ${contactId}:`, error.message);
-      return;
+      try {
+        const contact = await getContact({ config, contactId });
+        requests.contacts += 1;
+        values = contactTagValues(contact);
+        cacheContactTags(contactId, values, config);
+      } catch (error) {
+        // Erro aqui costuma ser da sessao ou da instancia, nao daquele contato.
+        requests.contacts += 1;
+        console.warn(`[MTalk] Nao foi possivel ler as TAGs do contato ${contactId}:`, error.message);
+        break;
+      }
+    }
+
+    if (values.length) {
+      comTagDoContato.push({ item, values });
+    }
+  }
+
+  if (!comTagDoContato.length) {
+    return;
+  }
+
+  // TAG do cliente que veio so com o id precisa do catalogo para ganhar nome.
+  const catalog =
+    !tagCatalog.loaded && comTagDoContato.some(({ values }) => needsTagCatalog(values))
+      ? await resolveTagCatalog({ config, requests })
+      : tagCatalog;
+
+  for (const { item, values } of comTagDoContato) {
+    item.ticket =
+      mapApiTicket(item.apiTicket, { now, tagCatalog: catalog, contactTags: values, panelUrl: config.panelUrl }) ||
+      item.ticket;
+  }
+}
+
+function readCachedContactTags(contactId) {
+  const entry = contactTagCache.get(contactId);
+  return entry && entry.expiresAt > Date.now() ? entry.values : null;
+}
+
+function cacheContactTags(contactId, values, config) {
+  const ttl = values.length ? config.contactTaggedCacheTtlMs : config.contactUntaggedCacheTtlMs;
+  contactTagCache.set(contactId, { values, expiresAt: Date.now() + ttl });
+}
+
+function pruneContactTagCache() {
+  const agora = Date.now();
+  for (const [contactId, entry] of contactTagCache) {
+    if (entry.expiresAt <= agora) {
+      contactTagCache.delete(contactId);
     }
   }
 }
 
-async function fetchMonitoredTickets({ token, config, queueIds, requests }) {
+async function fetchMonitoredTickets({ config, queueIds, requests }) {
   const collected = [];
 
   for (const status of config.statuses) {
     // O teto de paginas vale por status: encher o limite lendo os tickets
     // abertos nao pode deixar os pendentes de fora.
     for (let pageNumber = 1; pageNumber <= config.maxPages; pageNumber += 1) {
-      const page = await fetchTicketPage({ token, config, status, pageNumber, queueIds, requests });
+      const page = await fetchTicketPage({ config, status, pageNumber, queueIds, requests });
       collected.push(...page.tickets);
 
       if (!page.hasMore || page.tickets.length < config.pageSize) {
@@ -206,17 +378,19 @@ async function fetchMonitoredTickets({ token, config, queueIds, requests }) {
   return collected;
 }
 
-// "showAll" so e aceito para perfis administrativos. Quando o MTalk recusa, a
-// coleta segue sem ele: o token le as filas as quais o usuario pertence.
-async function fetchTicketPage({ token, config, status, pageNumber, queueIds, requests }) {
-  if (useShowAll) {
+// showAll so vai onde o painel do MTalk tambem manda (fora da aba de pendentes)
+// e so e aceito para perfis administrativos: quando o MTalk recusa, a coleta
+// segue sem ele e le as filas as quais o usuario pertence. Sessao recusada e
+// falha de rede nao dizem nada sobre o showAll, entao nao o desligam.
+async function fetchTicketPage({ config, status, pageNumber, queueIds, requests }) {
+  if (useShowAll && !STATUSES_WITHOUT_SHOW_ALL.has(status)) {
     try {
-      const page = await listTickets({ token, config, status, pageNumber, queueIds, showAll: true });
+      const page = await listTickets({ config, status, pageNumber, queueIds, showAll: true });
       requests.tickets += 1;
       return page;
     } catch (error) {
       requests.tickets += 1;
-      if (error.statusCode === 401) {
+      if (error.statusCode === 401 || error.statusCode === 503 || error.noResponse) {
         throw error;
       }
       useShowAll = false;
@@ -224,7 +398,7 @@ async function fetchTicketPage({ token, config, status, pageNumber, queueIds, re
     }
   }
 
-  const page = await listTickets({ token, config, status, pageNumber, queueIds, showAll: false });
+  const page = await listTickets({ config, status, pageNumber, queueIds, showAll: false });
   requests.tickets += 1;
   return page;
 }
@@ -234,6 +408,16 @@ function describeCollectorStatus() {
   return {
     configurado: config.isConfigured,
     baseUrl: config.baseUrl,
+    sessao: describeSession(),
+    coletaAutomatica: {
+      ativa: Boolean(schedulerTimer),
+      intervaloSegundos: config.collectIntervalMs / 1000,
+      emAndamento: Boolean(runningCollection),
+      ultimaExecucao: lastRun
+    },
+    ultimaColeta: lastCollection
+      ? { coletadoEm: lastCollection.collectedAt, ...lastCollection.totals, diagnostico: lastCollection.diagnostics }
+      : null,
     statusMonitorados: config.statuses,
     filasMonitoradas: getAllowedQueues(),
     limiteInatividadeMinutos: getInactivityThresholdMinutes(),
@@ -242,21 +426,14 @@ function describeCollectorStatus() {
       filas: queueCache.resolvedNames,
       validoAte: queueCache.expiresAt ? new Date(queueCache.expiresAt).toISOString() : null
     },
-    cacheTags: {
-      tags: tagCatalogCache.catalog.names,
-      validoAte: tagCatalogCache.expiresAt ? new Date(tagCatalogCache.expiresAt).toISOString() : null
-    }
+    contatosEmCache: contactTagCache.size
   };
 }
 
-function resetQueueCache() {
-  queueCache = { ids: [], expiresAt: 0, resolvedNames: [] };
-  tagCatalogCache = { catalog: EMPTY_CATALOG, expiresAt: 0 };
-  useShowAll = true;
-}
-
 module.exports = {
-  collectFromMtalk,
   describeCollectorStatus,
-  resetQueueCache
+  getCurrentAlerts,
+  runCollection,
+  startCollector,
+  stopCollector
 };

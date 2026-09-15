@@ -8,8 +8,8 @@
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_MODEL = "gpt-4o-mini";
-// A funcao serverless da Vercel tem maxDuration de 30s (ver vercel.json),
-// entao o timeout aqui precisa ficar abaixo disso para o erro ser tratavel.
+// Resumos grandes costumam sair em 10-20s; acima disso a chamada e abortada
+// com uma mensagem tratavel no painel.
 const DEFAULT_TIMEOUT_MS = 25000;
 // O resumo pede texto + quatro listas. Com 1200 a resposta era cortada quando
 // havia muitos atendentes ou filas, e resposta cortada nao vira JSON valido.
@@ -102,7 +102,7 @@ async function createJsonCompletion({ messages, model, temperature, maxOutputTok
 
 // A leitura do corpo fica dentro da janela de timeout: sem isso, um servidor
 // que aceita a conexao e trava no meio da resposta deixaria a chamada pendurada
-// ate o limite da funcao serverless.
+// indefinidamente.
 async function postCompletion(body, config) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -220,7 +220,7 @@ function safeJsonParse(value) {
   }
 }
 
-// Variavel criada em branco no painel da Vercel chega como "" — e Number("")
+// Variavel criada em branco no .env chega como "" — e Number("")
 // e 0, nao NaN. Sem esta guarda, OPENAI_MAX_OUTPUT_TOKENS vazio virava
 // max_tokens: 0 e OPENAI_TIMEOUT_MS vazio abortava a chamada instantaneamente.
 function parseNumber(value, fallback) {

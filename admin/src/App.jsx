@@ -1,12 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { BarChart3, Clock, LayoutDashboard, LogOut, Settings, Sparkles, Tags } from "lucide-react";
-import Login from "./pages/Login";
+import { useMemo, useState } from "react";
+import { BarChart3, Clock, LayoutDashboard, Settings, Sparkles, Tags } from "lucide-react";
 import Dashboard from "./pages/Dashboard";
 import Inactivity from "./pages/Inactivity";
 import Reports from "./pages/Reports";
 import AiPage from "./pages/AI";
 import SettingsPage from "./pages/Settings";
-import { api, getStoredToken, removeStoredToken, setStoredToken } from "./services/api";
 
 const views = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -16,21 +14,9 @@ const views = [
   { id: "settings", label: "Configuracoes", icon: Settings }
 ];
 
+// O painel roda localmente e, por enquanto, sem login.
 export default function App() {
-  const [token, setToken] = useState(getStoredToken());
-  const [user, setUser] = useState(null);
   const [view, setView] = useState("dashboard");
-
-  useEffect(() => {
-    if (!token) return;
-    api
-      .me()
-      .then((data) => setUser(data.user))
-      .catch(() => {
-        removeStoredToken();
-        setToken("");
-      });
-  }, [token]);
 
   const currentView = useMemo(() => {
     if (view === "reports") return <Reports />;
@@ -39,22 +25,6 @@ export default function App() {
     if (view === "settings") return <SettingsPage />;
     return <Dashboard />;
   }, [view]);
-
-  function handleLogin({ token: nextToken, user: nextUser }) {
-    setStoredToken(nextToken);
-    setToken(nextToken);
-    setUser(nextUser);
-  }
-
-  function logout() {
-    removeStoredToken();
-    setToken("");
-    setUser(null);
-  }
-
-  if (!token) {
-    return <Login onLogin={handleLogin} />;
-  }
 
   return (
     <div className="app-shell">
@@ -83,11 +53,6 @@ export default function App() {
             );
           })}
         </nav>
-
-        <button className="nav-button logout" type="button" onClick={logout}>
-          <LogOut aria-hidden="true" size={18} />
-          Sair
-        </button>
       </aside>
 
       <main className="workspace">
@@ -96,7 +61,7 @@ export default function App() {
             <p>Operacao de atendimento</p>
             <h1>{views.find((item) => item.id === view)?.label}</h1>
           </div>
-          <span>{user?.name || user?.email || "Administrador"}</span>
+          <span>Ambiente local</span>
         </header>
         {currentView}
       </main>

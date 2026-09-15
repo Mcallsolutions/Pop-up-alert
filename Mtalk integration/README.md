@@ -1,163 +1,142 @@
 # Integracao com a API oficial do MTalk
 
-Este diretorio guarda o mapeamento da API (`mtalk-api-mapeamento.md`) e este
-guia, que descreve como o projeto passou a **ler os tickets pela API oficial**
-em vez de interpretar a tela do painel.
+Este diretorio guarda os levantamentos da API e este guia, que descreve como o
+projeto le os tickets **somente pela API oficial do MTalk**.
 
-## Por que mudou
+| Arquivo | Conteudo |
+| --- | --- |
+| `mtalk-api-endpoints.md` | Levantamento de rede da tela de atendimento: cada chamada que o painel faz, com os parametros reais, inclusive as de escrita. **E a referencia do formato das chamadas do monitor.** |
+| `mtalk-api-mapeamento.md` | Mapeamento anterior (rede + bundles JS): autenticacao, mensagens, socket e rotas de apoio como `GET /backend/queue`. |
 
-A leitura de tela dependia de heuristica: pontuava elementos do DOM para
-adivinhar qual bloco era um ticket e qual texto era cliente, fila, atendente,
-empresa ou TAG. Qualquer ajuste de layout no MTalk podia quebrar tudo, o
-horario vinha como texto (`08:15`) e a inatividade era estimada a partir dele.
+## Arquitetura
 
-Na API cada campo ja vem separado e com o dado real:
+```text
+MTalk (API /backend)  <--  servidor local (coleta a cada 60s)  -->  SQLite
+                                     |
+                     +---------------+----------------+
+                     |                                |
+            painel web (relatorios)       extensao Chrome (so o pop-up)
+```
 
-| Dado | Antes (tela) | Agora (API) |
+- **Quem fala com o MTalk e so o servidor** (`server/src/services/mtalk/`). Ele
+  autentica com URL + token, le os tickets, grava o snapshot e guarda a ultima
+  leitura em memoria.
+- **A extensao nao le nada do MTalk**: nao olha o DOM, nao le o `localStorage`
+  nem a sessao do navegador e nao chama a API do MTalk. Ela busca os alertas ja
+  calculados em `GET /api/mtalk/alerts` no servidor local e desenha o pop-up na
+  tela de tickets.
+## Autenticacao: URL + token
+
+| Variavel | Valor |
+| --- | --- |
+| `MTALK_BASE_URL` | backend da instancia, terminando em `/backend` (ex.: `https://s11.mtalk.com.br/backend`) |
+| `MTALK_TOKEN` | token Bearer de um usuario do MTalk |
+
+- Cada leitura vai com `Authorization: Bearer <MTALK_TOKEN>`. O servidor **nao faz
+  login** nem chama `/auth/refresh_token`.
+- O token pode ser colado cru, com `Bearer ` na frente ou entre aspas (como fica
+  em `localStorage["token"]` no painel do MTalk).
+- O token nunca vai para o banco, para o log ou para `GET /api/mtalk/status`.
+- **Token expirado ou revogado**: o MTalk responde 401/403, a coleta falha, o
+  erro aparece em **Configuracoes** do painel e no popup da extensao, e o pop-up
+  some. Gere um novo token, atualize o `.env` e reinicie a API.
+- Use o token de um usuario com acesso as filas monitoradas. Um perfil
+  administrativo aceita `showAll=true` e enxerga os tickets de todos os
+  atendentes; sem ele, a coleta le as filas do proprio usuario.
+
+## O que o monitor chama — e so isso
+
+Por coleta (padrao de 1 minuto, `MTALK_COLLECT_INTERVAL_SECONDS`):
+
+| Chamada | Para que | Quando |
 | --- | --- | --- |
-| Cliente | maior linha em caixa alta do card | `contact.name` |
-| Fila | linha com `Suporte-...` | `queue.name` |
-| Atendente | linha que casava com a lista de apelidos | `user.name` |
-| Empresa | linha comecando com NETFIBRA/MIX/... | `whatsapp.name` |
-| TAG | elemento pequeno, colorido, `XXX - NOME` | `tags[]` do ticket **e** do contato |
-| Horario | `HH:mm` lido do card | `updatedAt` (ISO, UTC) |
-| Inatividade | diferenca do `HH:mm` para agora | diferenca real de `updatedAt` |
-| Identidade | cliente + fila + atendente + empresa + hora | `id` do ticket |
+| `GET /backend/tickets?status=open&showAll=true&queueIds=[...]` | tickets em atendimento, de todos os atendentes | 1x por coleta |
+| `GET /backend/tickets?status=pending&queueIds=[...]` | tickets aguardando na fila (a aba de pendentes do painel nao usa `showAll`) | 1x por coleta |
+| `...&pageNumber=N` | paginas extras, so quando o status tem mais de 40 tickets | raro |
+| `GET /backend/queue` | traduzir os nomes das filas monitoradas nos ids do `queueIds` | 1x a cada 60 min (cache) |
+| `GET /backend/tags/list` | nomear TAG que chega so com o id | so quando isso acontece; cache de 10 min |
+| `GET /backend/contacts/{id}` | TAG do cliente, quando a listagem nao a traz | so ticket sem TAG e com atendente; cache por contato; ate 20 consultas novas por coleta |
 
-## Quantas requisicoes cada leitura faz
+Ou seja: **2 requisicoes por coleta** no caso comum. Nao existe chamada por
+ticket.
 
-O objetivo e manter a leitura barata. Por ciclo (padrao de 1 minuto):
+### O que fica de fora de proposito
 
-| Chamada | Quando | Frequencia |
-| --- | --- | --- |
-| `GET /backend/queue` | resolver os ids das filas monitoradas | 1x a cada 10 min (cache) |
-| `GET /backend/tags/list` | catalogo oficial de TAGs | 1x a cada 10 min (cache) |
-| `GET /backend/tickets?status=open` | tickets em atendimento | 1x por ciclo |
-| `GET /backend/tickets?status=pending` | tickets aguardando | 1x por ciclo |
-| paginas extras | so quando ha mais de 40 tickets no status | raro |
-| `GET /backend/contacts/{id}` | TAGs do cliente, quando a listagem nao as traz | ate 20 por ciclo, so para ticket sem TAG |
+| Chamada do painel | Por que o monitor nao usa |
+| --- | --- |
+| `GET /backend/messages/{ticketId}?markAsRead=true` | marcaria a conversa como lida para o atendente. O monitor nao le conteudo de mensagem. |
+| `POST /backend/messages/{ticketId}`, `POST /backend/ticket-notes`, `POST`/`DELETE /backend/tickets/{id}/tags`, `PUT /backend/tickets/{id}` | escrita: a mensagem de teste do levantamento chegou ao WhatsApp real do cliente. O cliente HTTP do servidor so tem leituras (`GET`). |
+| `GET /backend/settings/*`, `/users/list`, `/quick-messages/list`, `/chats`, `/ticket-notes/list`, `/tickets/u/{uuid}` | servem para montar a tela; nenhum desses dados entra no alerta ou no relatorio. |
 
-Ou seja: **2 requisicoes por ciclo** no caso comum, 4 quando os caches de filas e
-de TAGs expiram. Nao existe chamada por ticket — fila, atendente, empresa e TAGs
-vem dentro da propria listagem. A consulta ao contato e a unica excecao, e so
-acontece na instancia que nao devolve `contact.tags` na listagem (ver
-"Identificacao das TAGs").
+### Cache e travas
 
-Duas decisoes ajudam nisso:
+- **Filas** (`/queue`): 60 minutos. Os ids so mudam quando uma fila e recriada.
+- **Catalogo de TAGs** (`/tags/list`): so e lido quando algum vinculo chega sem
+  nome. Quando lido, fica 10 minutos em cache.
+- **Contato** (`/contacts/{id}`): cache por contato — 30 minutos quando o cliente
+  ja tem TAG, 3 minutos quando nao tem, para o alerta sumir pouco depois de o
+  atendente registrar a TAG no contato.
+- **Uma coleta por vez**: o botao "Coletar agora" durante uma coleta agendada
+  espera a que ja esta rodando em vez de dobrar as chamadas.
 
-- as filas monitoradas viram `queueIds` na query, entao o proprio MTalk ja
-  devolve so o que interessa;
-- o `MutationObserver` que disparava uma leitura a cada mudanca no DOM foi
-  removido. Com chamadas de rede ele viraria rajada de requisicao a toa; o
-  intervalo fixo e a unica fonte de leituras automaticas.
+A conta de requisicoes aparece em **Configuracoes** do painel e em
+`requisicoesPorEndpoint` na resposta de `POST /api/mtalk/collect`.
 
 ## Identificacao das TAGs
 
 Uma TAG pode estar vinculada em dois lugares, e o painel do MTalk mostra os dois
-no mesmo campo — para o atendente, e tudo "a TAG do cliente":
+no mesmo campo:
 
 | Origem | Campo na resposta de `GET /backend/tickets` |
 | --- | --- |
 | TAG marcada no atendimento | `ticket.tags[]` |
 | TAG marcada no cliente | `ticket.contact.tags[]` |
 
-O monitor le **as duas**: qualquer uma tira o ticket da lista de alerta. Ler so
-`ticket.tags[]` era o que mantinha o ticket alertando depois de o atendente
-vincular a TAG ao contato.
+O monitor le **as duas**: qualquer uma tira o ticket da lista de alerta.
 
-O catalogo oficial (`GET /backend/tags/list`) entra por dois motivos:
+O catalogo (`GET /backend/tags/list`) da nome ao vinculo que chega so com o id
+(`{ tagId: 7 }`) e descarta vinculo de TAG ja excluida. Se ele falhar, a leitura
+continua: para o alerta, o que decide e existir vinculo.
 
-- o vinculo nem sempre vem com o nome junto (`{ tagId: 7 }`, ou so o id) — o
-  catalogo resolve o nome;
-- vinculo apontando para TAG ja excluida do cadastro e descartado.
+Quando a instancia **nao** devolve `contact.tags` na listagem (campo ausente, nao
+vazio), o monitor consulta `GET /backend/contacts/{id}` com as travas acima.
 
-Se `/tags/list` falhar, a leitura continua: TAG com nome segue valendo e TAG que
-veio so com id conta como vinculo sem nome (`TAG 7`). Para o alerta o que decide
-e existir vinculo, nao o nome.
+Codigo: `server/src/services/mtalk/mtalk.tags.js`.
 
-Quando a instancia **nao** devolve `contact.tags` dentro da listagem (o campo vem
-ausente, nao vazio), o monitor consulta `GET /backend/contacts/{id}` — mas so
-para ticket que continuaria no alerta (sem TAG e com atendente) e no maximo
-`MTALK_MAX_CONTACT_LOOKUPS` vezes por ciclo (padrao 20; `0` desliga).
+## Alertas e relatorios
 
-Codigo: `server/src/services/mtalk/mtalk.tags.js` (servidor) e as funcoes
-`collectTagNames`/`resolveTagName` em `extension/src/mtalk-api.js` (extensao).
+- **Registre a TAG do cliente**: ticket sem TAG, com atendente vinculado e contato
+  com nome.
+- **Alerta de inatividade**: ticket parado ha mais de
+  `INACTIVITY_THRESHOLD_MINUTES` (15) desde o `updatedAt`, com ou sem atendente.
 
-## Os dois caminhos de coleta
+Ticket `pending` normalmente chega **sem atendente** (`user` nulo): ninguem o
+assumiu. Ele fica fora dos relatorios e do alerta de TAG — nao ha a quem cobrar —,
+mas continua no de inatividade, onde "parado e sem responsavel" e o caso mais
+grave.
 
-### 1. Extensao (padrao, nao precisa configurar nada)
-
-`extension/src/mtalk-api.js` roda dentro da pagina do painel do MTalk, entao:
-
-- usa o token da **sessao ja aberta** (`localStorage["token"]`), sem segredo
-  novo para guardar;
-- as chamadas sao de mesma origem (`s11.mtalk.com.br` -> `/backend`), sem CORS;
-- quando o token expira, tenta `POST /backend/auth/refresh_token` uma vez e
-  refaz a chamada. O token renovado fica **so em memoria**, para nao mexer no
-  estado da aplicacao do MTalk.
-
-`extension/src/content.js` ficou responsavel apenas por agendar as leituras,
-desenhar os alertas na tela e mandar o snapshot para `POST /api/tickets/snapshot`.
-
-### 2. Servidor (opcional, sem navegador aberto)
-
-`POST /api/mtalk/collect` faz a mesma leitura direto do servidor e grava o
-snapshot. Exige `MTALK_TOKEN` no ambiente e o mesmo `EXTENSION_TOKEN` das outras
-rotas de coleta (ou o `CRON_SECRET`, para Cron Job da Vercel).
-
-```bash
-curl -X POST "https://seu-projeto.vercel.app/api/mtalk/collect" -H "x-extension-token: SEU_TOKEN"
-```
-
-Para conferir sem gravar nada, use `?dryRun=1`.
-
-Atencao: o token do MTalk expira junto com a sessao do usuario que o gerou,
-entao esse caminho precisa de manutencao periodica. A extensao nao tem esse
-problema porque le a sessao viva do navegador.
+O pop-up so aparece com uma coleta recente (ate 3 intervalos, minimo 3 minutos).
+Com a API local fora do ar ou o MTalk recusando o token, ele some em vez de
+mostrar alerta velho.
 
 ## Parametros monitorados
 
-Sao os mesmos de antes, agora aplicados sobre dados estruturados:
-
 | Parametro | Onde fica | Valor |
 | --- | --- | --- |
-| Filas | `server/src/services/queue-filter.js` e `extension/src/mtalk-api.js` | Suporte-TerraNet, PLANET, MIX, IDEZ, BDG, AIA |
-| Atendentes | `server/src/services/attendant-filter.js` e `extension/src/mtalk-api.js` | tabela de apelidos (`Alek` -> `Aleksandro`) |
+| Filas | `server/src/services/queue-filter.js` | Suporte-TerraNet, PLANET, MIX, IDEZ, BDG, AIA |
+| Atendentes | `server/src/services/attendant-filter.js` | tabela de apelidos (`Alek` -> `Aleksandro`) |
 | Empresas | `whatsapp.name` do ticket | conexao do MTalk (ex.: `0800 MIXTEL`) |
 | TAGs | `tags[]` do ticket e `contact.tags[]` do cliente | qualquer TAG vinculada = `COM_TAG` |
-| Inatividade | `server/src/config/monitoring.js` (`INACTIVITY_THRESHOLD_MINUTES`) | 15 minutos |
+| Inatividade | `INACTIVITY_THRESHOLD_MINUTES` | 15 minutos |
 | Status lidos | `MTALK_TICKET_STATUSES` | `open` e `pending` |
+| Fuso | `MONITOR_TIME_ZONE` | `America/Sao_Paulo` |
 
-## O que mudou no banco
+## Banco
 
-A migration `005_mtalk_api.sql` adiciona colunas que so existem quando a leitura
-veio da API: `external_ticket_id`, `ticket_uuid`, `ticket_status`,
-`last_message_at`, `unread_messages` e `tags`. Registros antigos ficam com esses
-campos nulos e continuam sendo lidos como antes.
+SQLite local (`server/data/monitor.sqlite`). Cada coleta grava um snapshot e uma
+linha por ticket; os relatorios usam `external_ticket_id` (o id do ticket no
+MTalk) para ficar so com a leitura mais recente de cada ticket.
 
-Nos relatorios, `external_ticket_id` passa a ser a chave de deduplicacao — uma
-linha por ticket, e nao mais uma por cliente. Nessas linhas as heuristicas de
-limpeza sao puladas de proposito: o nome vem do cadastro do contato, entao um
-cliente chamado "MIXTELECOM" nao e mais confundido com nome de empresa, e um
-atendente novo aparece no relatorio sem precisar entrar na lista de apelidos.
-
-## Tickets aguardando na fila
-
-Ler o status `pending` traz tickets que **ninguem assumiu ainda**: o MTalk
-devolve `userId` e `user` nulos, e o atendente chega vazio ate o relatorio. Ao
-contrario da leitura de tela, onde atendente vazio era falha de leitura, aqui e
-um fato — e os dois casos precisam de tratamento diferente:
-
-- **relatorios de TAG** (`missing-tags`, `by-queue`, `by-attendant` e os
-  contadores de TAG do `summary`): ficam de fora. Nao ha responsavel a quem
-  cobrar a TAG, e conta-los como falha distorce a conformidade de quem esta
-  atendendo;
-- **relatorios de inatividade**: continuam dentro. Um ticket parado ha 50
-  minutos sem ninguem atendendo e exatamente o alerta que importa.
-
-O alerta na tela segue a mesma divisao: "Registre a TAG do cliente" so lista
-tickets com atendente; "Alerta de inatividade" lista todos.
-
-O corte e aplicado apenas nas linhas com `external_ticket_id` preenchido, ou
-seja, nas gravadas pela API. O historico da leitura de tela continua com a regra
-antiga.
+`collected_at` e gravado na hora local da operacao com o offset
+(`2026-09-15T21:40:05-03:00`), para que o filtro de dia do painel seja o dia de
+Brasilia e nao o de UTC.

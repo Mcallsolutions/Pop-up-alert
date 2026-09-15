@@ -1,33 +1,20 @@
-// Monitor de tickets do MTalk.
+// Pop-up de alertas na tela de tickets do MTalk.
 //
-// A leitura vem da API oficial (mtalk-api.js) — nao ha mais leitura de tela.
-// Este arquivo cuida do que sobrou: agendar as leituras, mostrar os alertas na
-// pagina e enviar o snapshot para a API do painel.
+// A extensao nao le a pagina nem a sessao do MTalk: os tickets sao coletados
+// pelo servidor local direto na API oficial do MTalk. Este script so pede os
+// alertas ja calculados (via service worker) e desenha o pop-up.
 (() => {
-  // Uma leitura por minuto. A versao que lia a tela tambem reagia a cada
-  // mudanca no DOM; com chamadas de rede isso viraria rajada de requisicao a
-  // toa, entao o intervalo fixo e a unica fonte de leituras automaticas.
-  const SCAN_INTERVAL_MS = 60 * 1000;
-  const ONE_MINUTE_MS = 60 * 1000;
-  const ALERT_SNOOZE_MS = 5 * ONE_MINUTE_MS;
+  // Mesmo ritmo da coleta padrao do servidor (MTALK_COLLECT_INTERVAL_SECONDS).
+  const REFRESH_INTERVAL_MS = 60 * 1000;
+  const ALERT_SNOOZE_MS = 5 * 60 * 1000;
   const ALERT_ROOT_ID = "mcall-ticket-tag-alert-root";
-  // 2.1: a TAG passou a ser lida tambem do cliente (contact.tags), nao so do
-  // atendimento. A versao aparece no popup e serve para saber quais maquinas ja
-  // recarregaram a extensao.
-  const READER_VERSION = "2.1.0-api";
 
-  const api = window.McallMtalkApi;
-  const INACTIVITY_THRESHOLD_MINUTES = api?.INACTIVITY_THRESHOLD_MINUTES ?? 15;
-
-  let scanTimer = null;
-  let currentMissingTagAlertTickets = [];
-  let currentInactivityAlertTickets = [];
+  let refreshTimer = null;
   let alertSnoozedUntil = 0;
-  let lastDiagnostics = {};
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type === "FORCE_SCAN_FROM_POPUP") {
-      scanAndSend("manual")
+    if (message?.type === "REFRESH_ALERTS") {
+      refreshAlerts({ force: true })
         .then((result) => sendResponse(result))
         .catch((error) => sendResponse({ ok: false, error: error.message }));
       return true;
@@ -35,84 +22,27 @@
     return false;
   });
 
-  startMonitor();
+  injectAlertStyles();
+  refreshAlerts().catch(reportError);
+  refreshTimer = window.setInterval(() => refreshAlerts().catch(reportError), REFRESH_INTERVAL_MS);
+  window.addEventListener("beforeunload", () => window.clearInterval(refreshTimer));
 
-  function startMonitor() {
-    if (!api) {
-      console.error("[Mcall Ticket Tag Monitor] mtalk-api.js nao carregou; a leitura pela API oficial nao esta disponivel.");
-      return;
+  async function refreshAlerts({ force = false } = {}) {
+    const response = await sendRuntimeMessage({ type: "FETCH_ALERTS" });
+
+    // API fora do ar ou leitura velha: melhor nenhum pop-up do que um alerta
+    // que nao reflete mais a fila.
+    if (!response?.ok || !response.alerts || response.alerts.stale) {
+      removeAlert();
+      return { ok: false, error: response?.error || "Sem coleta recente no servidor" };
     }
 
-    injectAlertStyles();
-    scanAndSend("initial").catch(reportScanError);
-    scanTimer = window.setInterval(() => {
-      scanAndSend("interval").catch(reportScanError);
-    }, SCAN_INTERVAL_MS);
-    window.addEventListener("beforeunload", cleanup);
+    renderAlerts(response.alerts, { force });
+    return { ok: true };
   }
 
-  function cleanup() {
-    window.clearInterval(scanTimer);
-  }
-
-  async function scanAndSend(reason) {
-    const { tickets, diagnostics } = await api.collect();
-    lastDiagnostics = diagnostics;
-
-    // Ticket aguardando na fila nao tem a quem cobrar a TAG, entao fica fora
-    // desse alerta — mas continua no de inatividade, que e onde "parado e sem
-    // responsavel" precisa aparecer. Mesma regra do relatorio do painel.
-    const missingTickets = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG" && hasResponsible(ticket));
-    const inactiveTickets = tickets.filter(isInactiveTicket);
-    const scanDiagnostics = buildDiagnostics(reason, tickets, diagnostics);
-
-    renderTicketAlerts(missingTickets, inactiveTickets, { force: reason === "manual" });
-
-    const payload = {
-      source: "mtalk-api",
-      url: `${window.location.origin}/tickets`,
-      collectedAt: toOffsetIso(new Date()),
-      diagnostics: scanDiagnostics,
-      tickets
-    };
-
-    const response = await sendRuntimeMessage({ type: "SNAPSHOT_READY", payload });
-    window.dispatchEvent(
-      new CustomEvent("mcall-ticket-monitor:scan", {
-        detail: { reason, diagnostics: scanDiagnostics, tickets, response }
-      })
-    );
-
-    return {
-      ok: response?.ok !== false,
-      totalTickets: tickets.length,
-      missingTags: missingTickets.length,
-      inactiveTickets: inactiveTickets.length,
-      sent: response?.ok === true,
-      diagnostics: scanDiagnostics,
-      error: response?.error || ""
-    };
-  }
-
-  function reportScanError(error) {
+  function reportError(error) {
     console.error("[Mcall Ticket Tag Monitor]", error);
-    sendRuntimeMessage({
-      type: "SNAPSHOT_READY",
-      payload: {
-        source: "mtalk-api",
-        url: `${window.location.origin}/tickets`,
-        collectedAt: toOffsetIso(new Date()),
-        diagnostics: {
-          parserVersion: READER_VERSION,
-          reason: "error",
-          captureStatus: error?.code === "sem_token" ? "sem_sessao" : "erro_na_api",
-          parserMessage: error?.message || "Erro desconhecido na leitura pela API",
-          candidateCount: 0,
-          selectedCount: 0
-        },
-        tickets: []
-      }
-    });
   }
 
   function sendRuntimeMessage(message) {
@@ -127,43 +57,36 @@
     });
   }
 
-  function isInactiveTicket(ticket) {
-    return Number(ticket?.inactivityMinutes || 0) > INACTIVITY_THRESHOLD_MINUTES;
-  }
-
-  // Atendente vazio na API significa que ninguem assumiu o ticket ainda.
-  function hasResponsible(ticket) {
-    return Boolean(String(ticket?.attendant || "").trim());
-  }
-
-  function renderTicketAlerts(missingTagTickets, inactiveTickets, options = {}) {
-    const now = Date.now();
-
-    if (options.force) {
+  function renderAlerts(alerts, { force }) {
+    if (force) {
       alertSnoozedUntil = 0;
-    } else if (alertSnoozedUntil > now) {
-      document.getElementById(ALERT_ROOT_ID)?.remove();
+    } else if (alertSnoozedUntil > Date.now()) {
+      removeAlert();
       return;
     }
 
-    currentMissingTagAlertTickets = missingTagTickets.filter(isAlertableTicket).slice(0, 6);
-    currentInactivityAlertTickets = inactiveTickets.filter(isAlertableTicket).slice(0, 6);
+    const threshold = Number(alerts.thresholdMinutes || 15);
+    const missingTag = alerts.missingTag || { total: 0, items: [] };
+    const inactive = alerts.inactive || { total: 0, items: [] };
 
-    if (!currentMissingTagAlertTickets.length && !currentInactivityAlertTickets.length) {
-      document.getElementById(ALERT_ROOT_ID)?.remove();
+    if (!missingTag.items?.length && !inactive.items?.length) {
+      removeAlert();
       return;
     }
 
-    renderAlert();
-  }
+    const sections = [
+      buildAlertSection("missing-tag", "Registre a TAG do cliente", missingTag, (ticket) =>
+        [ticket.queue, ticket.attendant, ticket.company].filter(Boolean).join(" - ")
+      ),
+      buildAlertSection("inactivity", "Alerta de inatividade", inactive, (ticket) => {
+        const inactiveFor = Number(ticket.inactivityMinutes || 0);
+        const inactivityText = inactiveFor > 0 ? `${inactiveFor} min sem atividade` : `Mais de ${threshold} min sem atividade`;
+        return [inactivityText, ticket.displayTime ? `Horario ${ticket.displayTime}` : "", ticket.queue, ticket.attendant]
+          .filter(Boolean)
+          .join(" - ");
+      })
+    ].join("");
 
-  // O contato vem do cadastro do MTalk, entao basta ter nome para o alerta
-  // conseguir dizer de quem ele esta falando.
-  function isAlertableTicket(ticket) {
-    return Boolean(String(ticket?.clientName || "").trim());
-  }
-
-  function renderAlert() {
     let root = document.getElementById(ALERT_ROOT_ID);
     if (!root) {
       root = document.createElement("div");
@@ -171,24 +94,13 @@
       document.body.appendChild(root);
     }
 
-    const sections = [
-      buildAlertSection("missing-tag", "Registre a TAG do cliente", currentMissingTagAlertTickets, (ticket) =>
-        [ticket.queue, ticket.attendant, ticket.company].filter(Boolean).join(" - ")
-      ),
-      buildAlertSection("inactivity", "Alerta de inatividade", currentInactivityAlertTickets, (ticket) => {
-        const inactiveFor = Number(ticket.inactivityMinutes || 0);
-        const inactivityText =
-          inactiveFor > 0 ? `${inactiveFor} min sem atividade` : `Mais de ${INACTIVITY_THRESHOLD_MINUTES} min sem atividade`;
-        return [inactivityText, ticket.displayTime ? `Horario ${ticket.displayTime}` : "", ticket.queue, ticket.attendant]
-          .filter(Boolean)
-          .join(" - ");
-      })
-    ].join("");
-
     root.innerHTML = `
       <section class="mcall-alert" role="dialog" aria-live="polite" aria-label="Alertas de ticket">
         <div class="mcall-alert__header">
-          <strong>Alertas de tickets</strong>
+          <div class="mcall-alert__brand">
+            <span class="mcall-alert__eyebrow">Mcall</span>
+            <strong>Alertas de tickets</strong>
+          </div>
           <button type="button" class="mcall-alert__close" aria-label="Fechar alerta">&times;</button>
         </div>
         <div class="mcall-alert__body">${sections}</div>
@@ -197,36 +109,40 @@
 
     root.querySelector(".mcall-alert__close")?.addEventListener("click", () => {
       alertSnoozedUntil = Date.now() + ALERT_SNOOZE_MS;
-      currentMissingTagAlertTickets = [];
-      currentInactivityAlertTickets = [];
-      root.remove();
+      removeAlert();
     });
 
-    // Cada item leva ao proprio ticket: o uuid vem junto na resposta da API.
+    // Cada item leva ao proprio ticket, pelo uuid que veio da API do MTalk.
     root.querySelectorAll("[data-ticket-uuid]").forEach((item) => {
       item.addEventListener("click", () => {
-        window.location.href = `${window.location.origin}/tickets/${item.dataset.ticketUuid}`;
+        window.location.href = `${window.location.origin}/tickets/${encodeURIComponent(item.dataset.ticketUuid)}`;
       });
     });
   }
 
-  function buildAlertSection(type, title, tickets, getMeta) {
+  function removeAlert() {
+    document.getElementById(ALERT_ROOT_ID)?.remove();
+  }
+
+  function buildAlertSection(type, title, group, getMeta) {
+    const tickets = group.items || [];
     if (!tickets.length) {
       return "";
     }
 
+    const total = Number(group.total || tickets.length);
+    const heading = total > tickets.length ? `${title} (${tickets.length} de ${total})` : `${title} (${total})`;
     const items = tickets
       .map((ticket) => {
-        const itemTitle = escapeHtml(ticket.clientName);
         const meta = escapeHtml(getMeta(ticket));
         const uuid = ticket.ticketUuid ? ` data-ticket-uuid="${escapeHtml(ticket.ticketUuid)}"` : "";
-        return `<li${uuid}><strong>${itemTitle}</strong>${meta ? `<span>${meta}</span>` : ""}</li>`;
+        return `<li${uuid}><strong>${escapeHtml(ticket.clientName)}</strong>${meta ? `<span>${meta}</span>` : ""}</li>`;
       })
       .join("");
 
     return `
       <div class="mcall-alert__section" data-alert-type="${type}">
-        <strong class="mcall-alert__section-title">${escapeHtml(title)}</strong>
+        <strong class="mcall-alert__section-title">${escapeHtml(heading)}</strong>
         <ul>${items}</ul>
       </div>
     `;
@@ -239,22 +155,34 @@
 
     const style = document.createElement("style");
     style.id = "mcall-ticket-tag-alert-style";
+    // Mesma paleta do painel (admin/src/styles.css). As cores ficam em variaveis
+    // proprias, presas ao root do alerta, para nao colidir com o CSS do MTalk.
     style.textContent = `
       #${ALERT_ROOT_ID} {
+        --mcall-bg: #060f1e;
+        --mcall-bg-2: #0d1e36;
+        --mcall-green: #00e5b0;
+        --mcall-green-border: rgba(0, 229, 176, 0.2);
+        --mcall-green-glow: rgba(0, 229, 176, 0.12);
+        --mcall-blue: #60a5fa;
+        --mcall-yellow: #facc15;
+        --mcall-text-1: #f0f6ff;
+        --mcall-text-2: #8fa8c8;
+        --mcall-text-3: #4d6480;
+        --mcall-border: rgba(255, 255, 255, 0.06);
         position: fixed;
         right: 18px;
         top: 18px;
         z-index: 2147483647;
         width: min(380px, calc(100vw - 36px));
-        font-family: Inter, Roboto, Arial, sans-serif;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
       }
       #${ALERT_ROOT_ID} .mcall-alert {
-        background: #fff;
-        color: #1f2937;
-        border: 1px solid #f5b5b5;
-        border-left: 6px solid #d92d20;
+        background: linear-gradient(180deg, var(--mcall-bg-2) 0%, var(--mcall-bg) 100%);
+        color: var(--mcall-text-1);
+        border: 1px solid var(--mcall-green-border);
         border-radius: 8px;
-        box-shadow: 0 18px 45px rgba(15, 23, 42, 0.2);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), 0 0 28px var(--mcall-green-glow);
         overflow: hidden;
       }
       #${ALERT_ROOT_ID} .mcall-alert__header {
@@ -262,38 +190,78 @@
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 14px 14px 10px;
+        padding: 14px;
+        border-bottom: 1px solid var(--mcall-border);
+      }
+      #${ALERT_ROOT_ID} .mcall-alert__brand {
+        display: grid;
+        gap: 3px;
+      }
+      #${ALERT_ROOT_ID} .mcall-alert__eyebrow {
+        color: var(--mcall-green);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
       }
       #${ALERT_ROOT_ID} .mcall-alert__header strong {
+        color: var(--mcall-text-1);
         font-size: 15px;
         line-height: 1.2;
       }
       #${ALERT_ROOT_ID} .mcall-alert__close {
         appearance: none;
-        width: 28px;
-        height: 28px;
-        border: 0;
-        border-radius: 6px;
-        background: #f3f4f6;
-        color: #111827;
+        width: 30px;
+        height: 30px;
+        border: 1px solid rgba(59, 130, 246, 0.22);
+        border-radius: 8px;
+        background: rgba(59, 130, 246, 0.12);
+        color: var(--mcall-text-1);
         cursor: pointer;
         font-size: 20px;
         line-height: 1;
+        transition: background 0.2s, border-color 0.2s;
+      }
+      #${ALERT_ROOT_ID} .mcall-alert__close:hover {
+        background: rgba(0, 229, 176, 0.1);
+        border-color: var(--mcall-green-border);
       }
       #${ALERT_ROOT_ID} .mcall-alert__body {
         display: grid;
-        gap: 12px;
-        padding: 0 14px 14px;
+        gap: 14px;
+        max-height: calc(100vh - 120px);
+        overflow-y: auto;
+        padding: 12px 14px 14px;
+        scrollbar-color: var(--mcall-text-3) transparent;
+      }
+      #${ALERT_ROOT_ID} [data-alert-type="missing-tag"] {
+        --mcall-accent: var(--mcall-blue);
+      }
+      #${ALERT_ROOT_ID} [data-alert-type="inactivity"] {
+        --mcall-accent: var(--mcall-yellow);
       }
       #${ALERT_ROOT_ID} .mcall-alert__section {
         display: grid;
         gap: 8px;
       }
       #${ALERT_ROOT_ID} .mcall-alert__section-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--mcall-text-2);
         font-size: 12px;
+        font-weight: 800;
         line-height: 1.3;
-        color: #374151;
         text-transform: uppercase;
+      }
+      #${ALERT_ROOT_ID} .mcall-alert__section-title::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        flex-shrink: 0;
+        border-radius: 999px;
+        background: var(--mcall-accent);
+        box-shadow: 0 0 10px var(--mcall-accent);
       }
       #${ALERT_ROOT_ID} ul {
         margin: 0;
@@ -305,67 +273,33 @@
       #${ALERT_ROOT_ID} li {
         display: grid;
         gap: 3px;
-        padding: 9px;
-        border-radius: 6px;
-        background: #fff7f7;
+        padding: 9px 10px;
+        border: 1px solid var(--mcall-border);
+        border-left: 3px solid var(--mcall-accent);
+        border-radius: 8px;
+        background: rgba(3, 9, 18, 0.45);
+        transition: background 0.2s, border-color 0.2s;
       }
       #${ALERT_ROOT_ID} li[data-ticket-uuid] {
         cursor: pointer;
       }
+      #${ALERT_ROOT_ID} li[data-ticket-uuid]:hover {
+        background: rgba(255, 255, 255, 0.05);
+        border-color: var(--mcall-green-border);
+        border-left-color: var(--mcall-accent);
+      }
       #${ALERT_ROOT_ID} li strong {
+        color: var(--mcall-text-1);
         font-size: 13px;
         line-height: 1.3;
       }
       #${ALERT_ROOT_ID} li span {
-        color: #4b5563;
+        color: var(--mcall-text-2);
         font-size: 12px;
         line-height: 1.3;
       }
-      #${ALERT_ROOT_ID} [data-alert-type="inactivity"] li {
-        background: #fff8e1;
-      }
     `;
     document.documentElement.appendChild(style);
-  }
-
-  function buildDiagnostics(reason, tickets, apiDiagnostics = {}) {
-    const waiting = tickets.filter((ticket) => !hasResponsible(ticket)).length;
-    const missingTags = tickets.filter((ticket) => ticket.tagStatus === "SEM_TAG" && hasResponsible(ticket)).length;
-    const waitingText = waiting ? ` ${waiting} aguardando atendente.` : "";
-    let captureStatus = "tickets_detectados";
-    let parserMessage = `${tickets.length} ticket(s) lido(s) pela API oficial em ${apiDiagnostics.requisicoes || 0} requisicao(oes).${waitingText}`;
-
-    if (!tickets.length) {
-      captureStatus = "nenhum_ticket_detectado";
-      parserMessage =
-        "A API respondeu, mas nenhum ticket em atendimento esta nas filas monitoradas: TerraNet, PLANET, MIX, IDEZ, BDG e AIA.";
-    } else if (missingTags > 0) {
-      captureStatus = "tickets_sem_tag_detectados";
-      parserMessage = `${missingTags} ticket(s) sem TAG entre os ${tickets.length} lidos pela API oficial.${waitingText}`;
-    }
-
-    return {
-      parserVersion: READER_VERSION,
-      reason,
-      captureStatus,
-      parserMessage,
-      origem: "api-oficial",
-      // Mantem os nomes que o popup ja exibe: recebidos x monitorados.
-      candidateCount: Number(apiDiagnostics.ticketsRecebidos || 0),
-      selectedCount: Number(apiDiagnostics.ticketsMonitorados || tickets.length),
-      requisicoes: Number(apiDiagnostics.requisicoes || 0)
-    };
-  }
-
-  function toOffsetIso(date) {
-    const pad = (number) => String(Math.trunc(Math.abs(number))).padStart(2, "0");
-    const offset = -date.getTimezoneOffset();
-    const sign = offset >= 0 ? "+" : "-";
-    const hours = pad(offset / 60);
-    const minutes = pad(offset % 60);
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(
-      date.getMinutes()
-    )}:${pad(date.getSeconds())}${sign}${hours}:${minutes}`;
   }
 
   function escapeHtml(value) {
@@ -376,26 +310,4 @@
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
   }
-
-  window.McallTicketTagMonitor = {
-    scanAndSend,
-    async debug() {
-      const { tickets, diagnostics } = await api.collect();
-      console.table(
-        tickets.map((ticket) => ({
-          ticketId: ticket.externalTicketId,
-          clientName: ticket.clientName,
-          queue: ticket.queue,
-          attendant: ticket.attendant,
-          company: ticket.company,
-          displayTime: ticket.displayTime,
-          inactivityMinutes: ticket.inactivityMinutes,
-          tag: ticket.tag,
-          tagStatus: ticket.tagStatus
-        }))
-      );
-      return { diagnostics, tickets };
-    },
-    lastDiagnostics: () => lastDiagnostics
-  };
 })();

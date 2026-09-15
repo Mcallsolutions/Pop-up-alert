@@ -1,150 +1,60 @@
 const { getDatabase } = require("../database");
 const { getInactivityThresholdMinutes } = require("../config/monitoring");
 const { getAllowedQueues } = require("./queue-filter");
-const {
-  getKnownAttendants,
-  isKnownAttendant,
-  normalizeAttendantName,
-  sanitizeClientName
-} = require("./attendant-filter");
+const { normalizeAttendantName } = require("./attendant-filter");
 
 const INACTIVITY_THRESHOLD_MINUTES = getInactivityThresholdMinutes();
 
-// Linhas gravadas a partir da API oficial do MTalk. Nelas cada campo veio do
-// cadastro (contato, fila, usuario, conexao, tags), entao as heuristicas de
-// limpeza da leitura de tela nao se aplicam — e chegariam a atrapalhar, por
-// exemplo apagando um cliente cujo nome comeca com "MIX".
-const FROM_MTALK_API_SQL = `trim(coalesce(external_ticket_id, '')) <> ''`;
+// Um ticket so entra nas listas quando o contato tem nome: sem ele o painel e
+// o alerta nao conseguem dizer de quem e o atendimento.
+const IDENTIFIED_TICKET_SQL = `(trim(coalesce(client_name, '')) <> '')`;
 
-// Mesma limpeza aplicada na escrita (ticket.service), porem em SQL: descarta
-// nomes que na verdade sao atendente, empresa ou rotulo da tela do MTalk.
-const SANITIZED_CLIENT_NAME_SQL = `
-  CASE
-    WHEN client_name IS NULL OR trim(client_name) = '' THEN ''
-    WHEN ${FROM_MTALK_API_SQL} THEN trim(client_name)
-    WHEN UPPER(TRIM(client_name)) IN (
-      'STEPHANIE',
-      'GABRIEL OLIVEIRA',
-      'GABRIELL CARVALHO',
-      'GUILHERME GOMES',
-      'LUIS',
-      'ALEK',
-      'ALEKSANDRO',
-      'ALL',
-      'ABERTO',
-      'FECHADO',
-      'PENDENTE',
-      'RESOLVIDO',
-      'ATENDENTE',
-      'CLIENTE',
-      'FILA',
-      'TAG',
-      'TAGS',
-      'NAO IDENTIFICADO',
-      'NãO IDENTIFICADO',
-      'NÃO IDENTIFICADO',
-      'CLIENTE NAO IDENTIFICADO',
-      'CLIENTE NãO IDENTIFICADO',
-      'CLIENTE NÃO IDENTIFICADO'
-    ) THEN ''
-    WHEN UPPER(TRIM(client_name)) LIKE 'SUPORTE-%' THEN ''
-    -- "<Atendente>0800 <EMPRESA>": identificacao do atendente, nao um atendimento.
-    WHEN UPPER(TRIM(client_name)) LIKE '%0800%' THEN ''
-    WHEN UPPER(TRIM(client_name)) LIKE 'NETFIBRA%' THEN ''
-    WHEN UPPER(TRIM(client_name)) LIKE 'MIX%' THEN ''
-    WHEN UPPER(TRIM(client_name)) LIKE 'IDEZ%' THEN ''
-    WHEN UPPER(TRIM(client_name)) LIKE 'TERRA%' THEN ''
-    WHEN UPPER(TRIM(client_name)) LIKE 'PLANET%' THEN ''
-    ELSE trim(client_name)
-  END
-`;
-
-const SANITIZED_CLIENT_KEY_SQL = `lower(${SANITIZED_CLIENT_NAME_SQL})`;
-
-const TICKET_KEY_SQL = `
-  CASE
-    WHEN (${SANITIZED_CLIENT_KEY_SQL}) = ''
-      AND trim(coalesce(attendant, '')) = ''
-      AND trim(coalesce(company, '')) = ''
-      AND trim(coalesce(source_url, '')) LIKE 'https://s11.mtalk.com.br/tickets/%'
-      AND length(trim(coalesce(source_url, ''))) > length('https://s11.mtalk.com.br/tickets/')
-    THEN
-      lower(trim(coalesce(source_url, ''))) || '|' ||
-      lower(trim(coalesce(queue_name, '')))
-    ELSE
-      ${SANITIZED_CLIENT_KEY_SQL} || '|' ||
-      lower(trim(coalesce(queue_name, ''))) || '|' ||
-      lower(trim(coalesce(attendant, ''))) || '|' ||
-      lower(trim(coalesce(company, ''))) || '|' ||
-      lower(trim(coalesce(display_time, '')))
-  END
-`;
-
-// Com o id do ticket vindo da API nao ha o que adivinhar: cada ticket e uma
-// linha, e leituras repetidas do mesmo ticket colapsam na mais recente.
-const REPORT_DEDUPE_KEY_SQL = `
-  CASE
-    WHEN ${FROM_MTALK_API_SQL}
-    THEN 'mtalk|' || trim(external_ticket_id)
-    WHEN (${SANITIZED_CLIENT_KEY_SQL}) <> ''
-    THEN 'client|' || ${SANITIZED_CLIENT_KEY_SQL}
-    ELSE ${TICKET_KEY_SQL}
-  END
-`;
-
-// Um ticket so entra nas listas quando da para saber DE QUEM ele e: cliente
-// identificado e fila. E o caso que o painel precisava parar de mostrar —
-// linhas em que so a fila foi lida e todo o resto virava "-".
-//
-// Nao exigir aqui atendente nem empresa e proposital: na tela do MTalk esses
-// dois campos sao alternativos (a coluna mostra um ou o outro). Nos dados
-// reais, 29% dos tickets tem atendente, 22% tem empresa e apenas 12% tem os
-// dois — exigir ambos derrubava a lista de 119 para 7 itens.
-const IDENTIFIED_TICKET_SQL = `(
-  (${SANITIZED_CLIENT_NAME_SQL}) <> ''
-  AND trim(coalesce(queue_name, '')) <> ''
-)`;
-
-// Existe alguem a quem cobrar a TAG.
-//
-// Nas linhas da API, atendente vazio e um FATO: o ticket esta aguardando na
-// fila e ninguem o assumiu (o MTalk devolve user/userId nulos). Cobrar TAG de
-// um atendimento que ninguem pegou nao faz sentido, entao ele sai dos
-// relatorios de TAG — mas continua inteiro nos de inatividade, onde "parado e
-// sem responsavel" e justamente o caso mais grave.
-//
-// Nas linhas antigas, de leitura de tela, atendente vazio significava outra
-// coisa: a tela mostrava atendente OU empresa, entao o campo em branco era
-// falha de leitura, nao ausencia de responsavel. Por isso a regra so vale para
-// as linhas da API — aplicar no historico esvaziaria os relatorios antigos.
-const HAS_RESPONSIBLE_SQL = `(
-  NOT (${FROM_MTALK_API_SQL})
-  OR trim(coalesce(attendant, '')) <> ''
-)`;
+// Existe alguem a quem cobrar a TAG. Atendente vazio e um FATO na API: o
+// ticket esta aguardando na fila e ninguem o assumiu (o MTalk devolve
+// user/userId nulos). Ele sai dos relatorios de TAG, mas continua inteiro nos
+// de inatividade, onde "parado e sem responsavel" e o caso mais grave.
+const HAS_RESPONSIBLE_SQL = `(trim(coalesce(attendant, '')) <> '')`;
 
 // Prefixo comum das consultas: aplica os filtros e mantem, de cada ticket
-// repetido entre snapshots, apenas a leitura mais recente.
+// repetido entre coletas, apenas a leitura mais recente.
 function buildRankedTicketsSql(where) {
   return `
-      WITH filtered AS (
-        SELECT *, ${REPORT_DEDUPE_KEY_SQL} AS dedupeKey
-        FROM tickets
-        ${where}
-      ),
-      ranked AS (
+      WITH ranked AS (
         SELECT *,
           ROW_NUMBER() OVER (
-            PARTITION BY dedupeKey
+            PARTITION BY external_ticket_id
             ORDER BY datetime(collected_at) DESC, id DESC
           ) AS rowNumber
-        FROM filtered
+        FROM tickets
+        ${where}
       )`;
 }
+
+const TICKET_COLUMNS_SQL = `
+        id,
+        snapshot_id AS "snapshotId",
+        external_ticket_id AS "externalTicketId",
+        ticket_uuid AS "ticketUuid",
+        ticket_status AS "ticketStatus",
+        trim(coalesce(client_name, '')) AS "clientName",
+        queue_name AS queue,
+        trim(coalesce(attendant, '')) AS attendant,
+        company,
+        display_time AS "displayTime",
+        last_message_at AS "lastMessageAt",
+        inactivity_minutes AS "inactivityMinutes",
+        tag,
+        tags,
+        tag_status AS "tagStatus",
+        source_url AS url,
+        collected_at AS "collectedAt"`;
 
 async function getSummary(filters = {}) {
   const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
-  const readings = await database.prepare(`SELECT COUNT(DISTINCT snapshot_id) AS "totalReadings" FROM tickets ${where}`).get(...params);
+  const readings = await database
+    .prepare(`SELECT COUNT(DISTINCT snapshot_id) AS "totalReadings" FROM tickets ${where}`)
+    .get(...params);
   const row = await database
     .prepare(
       `
@@ -162,61 +72,40 @@ async function getSummary(filters = {}) {
     )
     .get(...params);
 
-  const totalTicketsProcessed = Number(row.totalTicketsProcessed || 0);
-  const totalWithTag = Number(row.totalWithTag || 0);
-  const totalWithoutTag = Number(row.totalWithoutTag || 0);
+  const totalTicketsProcessed = Number(row?.totalTicketsProcessed || 0);
+  const totalWithTag = Number(row?.totalWithTag || 0);
+  const totalWithoutTag = Number(row?.totalWithoutTag || 0);
   // Conformidade so olha o que da para cobrar: ticket aguardando na fila nao
-  // conta nem a favor nem contra. Sem isso, uma fila cheia de espera derrubaria
-  // o percentual de quem esta atendendo.
+  // conta nem a favor nem contra.
   const totalCobravel = totalWithTag + totalWithoutTag;
   const compliancePercent = totalCobravel ? Number(((totalWithTag / totalCobravel) * 100).toFixed(2)) : 0;
 
   return {
-    totalReadings: Number(readings.totalReadings || 0),
-    // Tudo que foi lido, inclusive o que esta aguardando atendente:
+    totalReadings: Number(readings?.totalReadings || 0),
     // totalTicketsProcessed = totalWithTag + totalWithoutTag + totalWithoutAttendant.
     totalTicketsProcessed,
     totalWithTag,
     totalWithoutTag,
-    totalWithoutAttendant: Number(row.totalWithoutAttendant || 0),
-    totalInactive: Number(row.totalInactive || 0),
+    totalWithoutAttendant: Number(row?.totalWithoutAttendant || 0),
+    totalInactive: Number(row?.totalInactive || 0),
     compliancePercent,
-    lastCollectedAt: row.lastCollectedAt || null
+    lastCollectedAt: row?.lastCollectedAt || null
   };
 }
 
-// A lista so entrega tickets identificados (ver IDENTIFIED_TICKET_SQL).
-// Registros em que a leitura reconheceu apenas a fila sao contados em
-// "incompletosOcultos" em vez de virarem linhas cheias de "-".
+// Tickets sem nome de contato sao contados em "incompletosOcultos" e os que
+// aguardam atendente em "semAtendenteOcultos", em vez de virarem linhas.
 async function getMissingTags(filters = {}) {
   const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
-  const limit = Math.min(Number(filters.limit || 500), 1000);
+  const limit = readLimit(filters.limit);
   const rankedSql = buildRankedTicketsSql(where);
-  const attendantSql = buildAttendantCaseSql();
 
   const rows = await database
     .prepare(
       `
       ${rankedSql}
-      SELECT
-        id,
-        snapshot_id AS "snapshotId",
-        external_ticket_id AS "externalTicketId",
-        ticket_uuid AS "ticketUuid",
-        ticket_status AS "ticketStatus",
-        ${SANITIZED_CLIENT_NAME_SQL} AS "clientName",
-        queue_name AS queue,
-        ${attendantSql} AS attendant,
-        company,
-        display_time AS "displayTime",
-        last_message_at AS "lastMessageAt",
-        inactivity_minutes AS "inactivityMinutes",
-        tag,
-        tags,
-        tag_status AS "tagStatus",
-        source_url AS url,
-        collected_at AS "collectedAt"
+      SELECT ${TICKET_COLUMNS_SQL}
       FROM ranked
       WHERE rowNumber = 1
         AND tag_status = 'SEM_TAG'
@@ -248,7 +137,7 @@ async function getMissingTags(filters = {}) {
   const totalCobraveis = Number(counters?.totalCobraveis || 0);
 
   return {
-    items: rows.map(sanitizeTicketRow),
+    items: rows.map(normalizeTicketRow),
     total: totalCobraveis,
     incompletosOcultos: totalSemTag - totalIdentificados,
     semAtendenteOcultos: totalIdentificados - totalCobraveis
@@ -267,26 +156,26 @@ async function getFilterOptions(filters = {}) {
   });
 
   const [attendants, companies, queues, clients] = await Promise.all([
-    selectDistinctValues(database, buildAttendantCaseSql(), where, params),
-    selectDistinctValues(database, "trim(coalesce(company, ''))", where, params),
-    selectDistinctValues(database, "trim(coalesce(queue_name, ''))", where, params),
-    selectDistinctValues(database, SANITIZED_CLIENT_NAME_SQL, where, params)
+    selectDistinctValues(database, "attendant", where, params),
+    selectDistinctValues(database, "company", where, params),
+    selectDistinctValues(database, "queue_name", where, params),
+    selectDistinctValues(database, "client_name", where, params)
   ]);
 
   return { attendants, companies, queues, clients };
 }
 
-async function selectDistinctValues(database, expression, where, params) {
+async function selectDistinctValues(database, column, where, params) {
   const rows = await database
     .prepare(
       `
       SELECT value
       FROM (
-        SELECT ${expression} AS value
+        SELECT trim(coalesce(${column}, '')) AS value
         FROM tickets
         ${where}
       ) AS valores
-      WHERE value IS NOT NULL AND trim(value) <> ''
+      WHERE value <> ''
       GROUP BY value
       ORDER BY value
       LIMIT 500
@@ -319,39 +208,21 @@ async function getInactivitySummary(filters = {}) {
 
   return {
     thresholdMinutes: INACTIVITY_THRESHOLD_MINUTES,
-    inactiveTickets: Number(row.inactiveTickets || 0),
-    maxInactivityMinutes: Number(row.maxInactivityMinutes || 0),
-    averageInactivityMinutes: row.averageInactivityMinutes ? Number(Number(row.averageInactivityMinutes).toFixed(1)) : 0,
-    lastCollectedAt: row.lastCollectedAt || null
+    inactiveTickets: Number(row?.inactiveTickets || 0),
+    maxInactivityMinutes: Number(row?.maxInactivityMinutes || 0),
+    averageInactivityMinutes: roundAverage(row?.averageInactivityMinutes),
+    lastCollectedAt: row?.lastCollectedAt || null
   };
 }
 
 async function getInactiveTickets(filters = {}) {
   const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
-  const limit = Math.min(Number(filters.limit || 500), 1000);
   const rows = await database
     .prepare(
       `
       ${buildRankedTicketsSql(where)}
-      SELECT
-        id,
-        snapshot_id AS "snapshotId",
-        external_ticket_id AS "externalTicketId",
-        ticket_uuid AS "ticketUuid",
-        ticket_status AS "ticketStatus",
-        ${SANITIZED_CLIENT_NAME_SQL} AS "clientName",
-        queue_name AS queue,
-        ${buildAttendantCaseSql()} AS attendant,
-        company,
-        display_time AS "displayTime",
-        last_message_at AS "lastMessageAt",
-        inactivity_minutes AS "inactivityMinutes",
-        tag,
-        tags,
-        tag_status AS "tagStatus",
-        source_url AS url,
-        collected_at AS "collectedAt"
+      SELECT ${TICKET_COLUMNS_SQL}
       FROM ranked
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
@@ -360,45 +231,20 @@ async function getInactiveTickets(filters = {}) {
       LIMIT ?
     `
     )
-    .all(...params, INACTIVITY_THRESHOLD_MINUTES, limit);
+    .all(...params, INACTIVITY_THRESHOLD_MINUTES, readLimit(filters.limit));
 
-  return { items: rows.map(sanitizeTicketRow) };
+  return { items: rows.map(normalizeTicketRow) };
 }
 
 async function getInactivityByAttendant(filters = {}) {
-  const database = await getDatabase();
-  const { where, params } = buildTicketFilters(filters);
-  const caseSql = buildAttendantCaseSql();
-  const rows = await database
-    .prepare(
-      `
-      ${buildRankedTicketsSql(where)},
-      normalized AS (
-        SELECT
-          *,
-          ${caseSql} AS normalizedAttendant
-        FROM ranked
-        WHERE rowNumber = 1
-      )
-      SELECT
-        normalizedAttendant AS attendant,
-        COUNT(*) AS "inactiveTickets",
-        MAX(COALESCE(inactivity_minutes, 0)) AS "maxInactivityMinutes",
-        AVG(COALESCE(inactivity_minutes, 0)) AS "averageInactivityMinutes"
-      FROM normalized
-      WHERE normalizedAttendant <> ''
-        AND COALESCE(inactivity_minutes, 0) > ?
-        AND ${IDENTIFIED_TICKET_SQL}
-      GROUP BY normalizedAttendant
-      ORDER BY "inactiveTickets" DESC, "maxInactivityMinutes" DESC
-    `
-    )
-    .all(...params, INACTIVITY_THRESHOLD_MINUTES);
-
-  return { items: rows.map(withInactivityStats) };
+  return getInactivityGroupedBy(filters, "attendant", "attendant", `${HAS_RESPONSIBLE_SQL}`);
 }
 
 async function getInactivityByCompany(filters = {}) {
+  return getInactivityGroupedBy(filters, "COALESCE(NULLIF(trim(company), ''), 'Nao identificada')", "company");
+}
+
+async function getInactivityGroupedBy(filters, expression, alias, extraCondition = "1 = 1") {
   const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
   const rows = await database
@@ -406,7 +252,7 @@ async function getInactivityByCompany(filters = {}) {
       `
       ${buildRankedTicketsSql(where)}
       SELECT
-        COALESCE(NULLIF(company, ''), 'Nao identificada') AS company,
+        ${expression} AS ${alias},
         COUNT(*) AS "inactiveTickets",
         MAX(COALESCE(inactivity_minutes, 0)) AS "maxInactivityMinutes",
         AVG(COALESCE(inactivity_minutes, 0)) AS "averageInactivityMinutes"
@@ -414,7 +260,8 @@ async function getInactivityByCompany(filters = {}) {
       WHERE rowNumber = 1
         AND COALESCE(inactivity_minutes, 0) > ?
         AND ${IDENTIFIED_TICKET_SQL}
-      GROUP BY COALESCE(NULLIF(company, ''), 'Nao identificada')
+        AND ${extraCondition}
+      GROUP BY ${expression}
       ORDER BY "inactiveTickets" DESC, "maxInactivityMinutes" DESC
     `
     )
@@ -424,37 +271,15 @@ async function getInactivityByCompany(filters = {}) {
 }
 
 async function getReportByAttendant(filters = {}) {
-  const database = await getDatabase();
-  const { where, params } = buildTicketFilters(filters);
-  const caseSql = buildAttendantCaseSql();
-  const rows = await database
-    .prepare(
-      `
-      ${buildRankedTicketsSql(where)},
-      normalized AS (
-        SELECT
-          *,
-          ${caseSql} AS normalizedAttendant
-        FROM ranked
-        WHERE rowNumber = 1
-      )
-      SELECT
-        normalizedAttendant AS attendant,
-        COUNT(*) AS "totalTickets",
-        SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS "totalWithTag",
-        SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS "totalWithoutTag"
-      FROM normalized
-      WHERE normalizedAttendant <> ''
-      GROUP BY normalizedAttendant
-      ORDER BY "totalWithoutTag" DESC, "totalTickets" DESC
-    `
-    )
-    .all(...params);
-
-  return { items: rows.map(withFailurePercent) };
+  return getTagReportGroupedBy(filters, "trim(attendant)", "attendant");
 }
 
 async function getReportByQueue(filters = {}) {
+  return getTagReportGroupedBy(filters, "COALESCE(NULLIF(queue_name, ''), 'Nao identificada')", "queue");
+}
+
+// Relatorio de TAG agrupado. Ticket aguardando atendente fica de fora.
+async function getTagReportGroupedBy(filters, expression, alias) {
   const database = await getDatabase();
   const { where, params } = buildTicketFilters(filters);
   const rows = await database
@@ -462,14 +287,14 @@ async function getReportByQueue(filters = {}) {
       `
       ${buildRankedTicketsSql(where)}
       SELECT
-        COALESCE(NULLIF(queue_name, ''), 'Nao identificada') AS queue,
+        ${expression} AS ${alias},
         COUNT(*) AS "totalTickets",
         SUM(CASE WHEN tag_status = 'COM_TAG' THEN 1 ELSE 0 END) AS "totalWithTag",
         SUM(CASE WHEN tag_status = 'SEM_TAG' THEN 1 ELSE 0 END) AS "totalWithoutTag"
       FROM ranked
       WHERE rowNumber = 1
         AND ${HAS_RESPONSIBLE_SQL}
-      GROUP BY COALESCE(NULLIF(queue_name, ''), 'Nao identificada')
+      GROUP BY ${expression}
       ORDER BY "totalWithoutTag" DESC, "totalTickets" DESC
     `
     )
@@ -486,6 +311,9 @@ function buildTicketFilters(filters = {}) {
   conditions.push(`queue_name IN (${allowedQueues.map(() => "?").join(", ")})`);
   params.push(...allowedQueues);
 
+  // collected_at e gravado na hora local da operacao com o offset
+  // ("2026-09-15T21:40:05-03:00"), entao o dia e os limites comparam o texto
+  // local direto, sem conversao de fuso.
   const day = normalizeDateOnly(filters.day);
   if (day) {
     conditions.push("substr(collected_at, 1, 10) = ?");
@@ -494,13 +322,13 @@ function buildTicketFilters(filters = {}) {
 
   const startDate = normalizeDateTimeFilter(filters.startDate, "start");
   if (!day && startDate) {
-    conditions.push("datetime(collected_at) >= datetime(?)");
+    conditions.push("substr(collected_at, 1, 19) >= ?");
     params.push(startDate);
   }
 
   const endDate = normalizeDateTimeFilter(filters.endDate, "end");
   if (!day && endDate) {
-    conditions.push("datetime(collected_at) <= datetime(?)");
+    conditions.push("substr(collected_at, 1, 19) <= ?");
     params.push(endDate);
   }
 
@@ -525,6 +353,8 @@ function addLikeFilter(conditions, params, column, value) {
   params.push(`%${cleanValue}%`);
 }
 
+// O atendente ja e gravado normalizado ("Alek" vira "Aleksandro"), entao a
+// busca tenta o texto digitado e tambem o nome canonico dele.
 function addAttendantFilter(conditions, params, value) {
   const cleanValue = String(value || "").trim();
   if (!cleanValue) {
@@ -532,7 +362,7 @@ function addAttendantFilter(conditions, params, value) {
   }
 
   const normalized = normalizeAttendantName(cleanValue) || cleanValue;
-  conditions.push(`(UPPER(attendant) LIKE UPPER(?) OR UPPER(${buildAttendantCaseSql()}) LIKE UPPER(?))`);
+  conditions.push("(UPPER(attendant) LIKE UPPER(?) OR UPPER(attendant) LIKE UPPER(?))");
   params.push(`%${cleanValue}%`, `%${normalized}%`);
 }
 
@@ -543,7 +373,9 @@ function addNormalizedLikeFilter(conditions, params, column, value) {
   }
 
   const normalized = normalizeComparableText(cleanValue);
-  conditions.push(`(UPPER(${column}) LIKE UPPER(?) OR ${normalizeComparableSql(column)} LIKE ?)`);
+  conditions.push(
+    `(UPPER(${column}) LIKE UPPER(?) OR UPPER(REPLACE(REPLACE(REPLACE(${column}, ' ', ''), '-', ''), '_', '')) LIKE ?)`
+  );
   params.push(`%${cleanValue}%`, `%${normalized}%`);
 }
 
@@ -552,6 +384,7 @@ function normalizeDateOnly(value) {
   return match?.[1] || "";
 }
 
+// Sempre "YYYY-MM-DDTHH:MM:SS", o mesmo tamanho de substr(collected_at, 1, 19).
 function normalizeDateTimeFilter(value, boundary) {
   const cleanValue = String(value || "").trim();
   if (!cleanValue) {
@@ -562,77 +395,42 @@ function normalizeDateTimeFilter(value, boundary) {
     return `${cleanValue}T${boundary === "end" ? "23:59:59" : "00:00:00"}`;
   }
 
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(cleanValue)) {
-    return `${cleanValue}:00`;
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}$/.test(cleanValue)) {
+    return `${cleanValue.replace(" ", "T")}:${boundary === "end" ? "59" : "00"}`;
   }
 
-  return cleanValue;
-}
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/.test(cleanValue)) {
+    return cleanValue.replace(" ", "T").slice(0, 19);
+  }
 
-function normalizeComparableSql(column) {
-  return `UPPER(REPLACE(REPLACE(REPLACE(${column}, ' ', ''), '-', ''), '_', ''))`;
+  return "";
 }
 
 function normalizeComparableText(value) {
   return String(value || "")
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .replace(/[\s_-]+/g, "")
     .toUpperCase();
 }
 
-function sanitizeTicketRow(row) {
-  const fromApi = Boolean(String(row.externalTicketId || "").trim());
+function readLimit(value) {
+  return Math.min(Math.max(Number(value) || 500, 1), 1000);
+}
 
+function normalizeTicketRow(row) {
   return {
     ...row,
-    clientName: fromApi ? String(row.clientName || "").trim() : sanitizeClientName(row.clientName),
-    attendant: fromApi ? String(row.attendant || "").trim() : sanitizeAttendantName(row.attendant),
-    tags: splitTags(row.tags),
-    inactivityMinutes: row.inactivityMinutes === null || row.inactivityMinutes === undefined ? null : Number(row.inactivityMinutes || 0)
+    tags: String(row.tags || "")
+      .split("|")
+      .map((tag) => tag.trim())
+      .filter(Boolean),
+    inactivityMinutes: row.inactivityMinutes === null || row.inactivityMinutes === undefined ? null : Number(row.inactivityMinutes)
   };
 }
 
-function splitTags(value) {
-  return String(value || "")
-    .split("|")
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-}
-
-function buildAttendantCaseSql() {
-  const knownAttendants = getKnownAttendants();
-  if (!knownAttendants.length) {
-    return "''";
-  }
-
-  const clauses = knownAttendants
-    .map((name) => {
-      const canonical = escapeSqlLiteral(name);
-      const upper = escapeSqlLiteral(name.toUpperCase());
-      const companyClauses = ["NETFIBRA", "MIX", "IDEZ", "TERRA", "PLANET"]
-        .map((prefix) => {
-          const escapedPrefix = escapeSqlLiteral(prefix);
-          return `OR UPPER(TRIM(attendant)) LIKE '${upper}${escapedPrefix}%' OR UPPER(TRIM(attendant)) LIKE '${upper} ${escapedPrefix}%'`;
-        })
-        .join(" ");
-      return `WHEN UPPER(TRIM(attendant)) = '${upper}' ${companyClauses} THEN '${canonical}'`;
-    })
-    .join(" ");
-  // Nas linhas da API o atendente e o proprio user.name do MTalk, entao passa
-  // direto: descartar quem nao esta na lista de apelidos so faria sentido
-  // enquanto o nome vinha de texto lido da tela.
-  return `CASE ${clauses} WHEN ${FROM_MTALK_API_SQL} THEN trim(coalesce(attendant, '')) ELSE '' END`;
-}
-
-function escapeSqlLiteral(value) {
-  return String(value || "").replace(/'/g, "''");
-}
-
-function sanitizeAttendantName(value) {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
-  if (!text || !isKnownAttendant(text)) return "";
-  return normalizeAttendantName(text);
+function roundAverage(value) {
+  return value ? Number(Number(value).toFixed(1)) : 0;
 }
 
 function withFailurePercent(row) {
@@ -652,7 +450,7 @@ function withInactivityStats(row) {
     ...row,
     inactiveTickets: Number(row.inactiveTickets || 0),
     maxInactivityMinutes: Number(row.maxInactivityMinutes || 0),
-    averageInactivityMinutes: row.averageInactivityMinutes ? Number(Number(row.averageInactivityMinutes).toFixed(1)) : 0
+    averageInactivityMinutes: roundAverage(row.averageInactivityMinutes)
   };
 }
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Bot, Pencil, Plus, RefreshCw, Save, Sparkles, Trash2, X } from "lucide-react";
 import FilterBar, { sameFilters, todayFilters } from "../../components/FilterBar";
 import AiSummaryCard from "../../components/AiSummaryCard";
@@ -194,7 +194,6 @@ export default function AiPage() {
                 <tr>
                   <th>Gerado em</th>
                   <th>Modelo</th>
-                  <th>Responsavel</th>
                   <th>Tokens</th>
                   <th>Acao</th>
                 </tr>
@@ -204,7 +203,6 @@ export default function AiPage() {
                   <tr key={item.id}>
                     <td>{formatDateTime(item.createdAt)}</td>
                     <td>{item.model || "-"}</td>
-                    <td>{item.createdBy || "-"}</td>
                     <td>{item.usage?.totalTokens || 0}</td>
                     <td>
                       <button className="link-button" type="button" onClick={() => setSummary(item)}>

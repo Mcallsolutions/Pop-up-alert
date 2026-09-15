@@ -4,23 +4,18 @@
   --bg: #030912;
   --bg-2: #060f1e;
   --bg-3: #0a1628;
-  --bg-4: #0d1e36;
   --green: #00e5b0;
   --green-dim: #00c49a;
-  --green-dark: #009e82;
   --green-glow: rgba(0, 229, 176, 0.12);
-  --green-glow-strong: rgba(0, 229, 176, 0.22);
   --green-border: rgba(0, 229, 176, 0.2);
   --green-border-strong: rgba(0, 229, 176, 0.4);
   --blue-accent: #3b82f6;
   --blue-glow: rgba(59, 130, 246, 0.18);
-  --white: #ffffff;
   --text-1: #f0f6ff;
   --text-2: #8fa8c8;
   --text-3: #4d6480;
   --border: rgba(255, 255, 255, 0.06);
   --border-light: rgba(255, 255, 255, 0.1);
-  --card: rgba(255, 255, 255, 0.025);
   --card-hover: rgba(255, 255, 255, 0.05);
   --glass: rgba(10, 22, 40, 0.7);
   --radius: 8px;
@@ -55,36 +50,12 @@ button {
   cursor: pointer;
 }
 
-.login-screen {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background:
-    radial-gradient(circle at 50% 8%, var(--green-glow-strong), transparent 34%),
-    linear-gradient(155deg, var(--bg) 0%, var(--bg-2) 50%, var(--bg-4) 100%);
-}
-
-.login-panel {
-  width: min(420px, 100%);
-  display: grid;
-  gap: 18px;
-  padding: 28px;
-  background: linear-gradient(180deg, rgba(13, 30, 54, 0.88), rgba(6, 15, 30, 0.94));
-  border: 1px solid var(--green-border);
-  border-radius: var(--radius);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34), 0 0 0 1px rgba(255, 255, 255, 0.025);
-  backdrop-filter: blur(16px);
-}
-
-.login-title,
 .brand {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.login-title h1,
 .topbar h1,
 .section-toolbar h2,
 .table-panel h3 {
@@ -92,7 +63,6 @@ button {
   color: var(--text-1);
 }
 
-.login-title p,
 .section-toolbar p,
 .topbar p,
 .brand span,
@@ -100,19 +70,6 @@ button {
   margin: 0;
   color: var(--text-2);
   font-size: 13px;
-}
-
-.mark {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius);
-  background: linear-gradient(135deg, var(--green) 0%, var(--blue-accent) 100%);
-  color: var(--bg);
-  font-size: 22px;
-  font-weight: 850;
-  box-shadow: 0 0 28px var(--green-glow-strong);
 }
 
 label {
@@ -204,7 +161,6 @@ label small {
   box-shadow: 0 0 22px var(--green-glow);
 }
 
-.form-error,
 .notice.error {
   margin: 0;
   color: #7dd3fc;
@@ -286,10 +242,6 @@ nav {
   background: rgba(0, 229, 176, 0.1);
   color: var(--text-1);
   box-shadow: inset 3px 0 0 var(--green);
-}
-
-.nav-button.logout {
-  color: #93c5fd;
 }
 
 .workspace {

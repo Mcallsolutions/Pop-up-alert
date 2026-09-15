@@ -1,8 +1,7 @@
-const TOKEN_KEY = "mcall_admin_token";
 const API_URL_KEY = "mcall_admin_api_url";
 
-// Vazio = mesma origem do painel. E o padrao no deploy unico da Vercel,
-// onde o painel esta em "/" e a API em "/api". Em dev o Vite faz proxy.
+// Vazio = mesma origem do painel. Em dev o Vite faz proxy de /api para a API
+// local (http://localhost:3333).
 const DEFAULT_API_URL = import.meta.env.VITE_API_URL ?? "";
 
 export function getApiBaseUrl() {
@@ -21,32 +20,7 @@ export function setApiBaseUrl(value) {
   localStorage.setItem(API_URL_KEY, normalized);
 }
 
-export function getStoredToken() {
-  localStorage.removeItem(TOKEN_KEY);
-  return sessionStorage.getItem(TOKEN_KEY) || "";
-}
-
-export function setStoredToken(token) {
-  localStorage.removeItem(TOKEN_KEY);
-  sessionStorage.setItem(TOKEN_KEY, token);
-}
-
-export function removeStoredToken() {
-  sessionStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(TOKEN_KEY);
-}
-
 export const api = {
-  login(payload) {
-    return request("/api/auth/login", {
-      method: "POST",
-      body: payload,
-      auth: false
-    });
-  },
-  me() {
-    return request("/api/auth/me");
-  },
   summary(filters = {}) {
     return request(`/api/reports/summary${toQuery(filters)}`);
   },
@@ -77,6 +51,9 @@ export const api = {
   mtalkStatus() {
     return request("/api/mtalk/status");
   },
+  mtalkCollect() {
+    return request("/api/mtalk/collect", { method: "POST" });
+  },
   aiStatus() {
     return request("/api/ai/status");
   },
@@ -104,21 +81,9 @@ export const api = {
 };
 
 async function request(path, options = {}) {
-  const headers = {
-    "content-type": "application/json",
-    ...(options.headers || {})
-  };
-
-  if (options.auth !== false) {
-    const token = getStoredToken();
-    if (token) {
-      headers.authorization = `Bearer ${token}`;
-    }
-  }
-
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: options.method || "GET",
-    headers,
+    headers: { "content-type": "application/json" },
     body: options.body ? JSON.stringify(options.body) : undefined
   });
 
@@ -140,4 +105,3 @@ function toQuery(filters) {
   const query = params.toString();
   return query ? `?${query}` : "";
 }
-

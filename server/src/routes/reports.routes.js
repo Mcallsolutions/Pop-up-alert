@@ -1,5 +1,4 @@
 const express = require("express");
-const authMiddleware = require("../middlewares/auth.middleware");
 const {
   getSummary,
   getFilterOptions,
@@ -13,8 +12,6 @@ const {
 } = require("../services/report.service");
 
 const router = express.Router();
-
-router.use(authMiddleware);
 
 router.get("/summary", async (req, res, next) => {
   try {
