@@ -48,6 +48,10 @@
           <dt>Situacao</dt>
           <dd id="situation">-</dd>
         </div>
+        <div>
+          <dt>Alertas de</dt>
+          <dd id="scope">-</dd>
+        </div>
         <div id="errorRow" hidden>
           <dt>Erro</dt>
           <dd id="lastError">-</dd>
@@ -62,7 +66,11 @@
       <form id="configForm" class="config">
         <label>
           URL da API
-          <input id="apiBaseUrl" name="apiBaseUrl" type="url" placeholder="http://localhost:3333" />
+          <input id="apiBaseUrl" name="apiBaseUrl" type="url" placeholder="https://gestao.mcallsolutions.com.br" />
+        </label>
+        <label>
+          Seu token de acesso
+          <input id="apiToken" name="apiToken" type="password" placeholder="mca_..." autocomplete="off" />
         </label>
         <button type="submit">Salvar configuracao</button>
       </form>

@@ -1,7 +1,6 @@
-const ALLOWED_QUEUE_CODES = new Set(["TERRANET", "PLANET", "MIX", "IDEZ", "BDG", "AIA"]);
+const ALLOWED_QUEUE_CODES = new Set(["TERRANET", "MIX", "IDEZ", "BDG", "AIA"]);
 const ALLOWED_QUEUE_LABELS = {
   TERRANET: "TerraNet",
-  PLANET: "PLANET",
   MIX: "MIX",
   IDEZ: "IDEZ",
   BDG: "BDG",

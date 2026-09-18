@@ -14,6 +14,7 @@
 // A autenticacao (URL + token) fica em mtalk.client.js.
 
 const { MAX_TICKETS_PER_SNAPSHOT, getInactivityThresholdMinutes, getMtalkConfig } = require("../../config/monitoring");
+const { normalizeAttendantName } = require("../attendant-filter");
 const { getAllowedQueues, normalizeQueueName } = require("../queue-filter");
 const { saveSnapshot } = require("../ticket.service");
 const { toZonedIso } = require("../time-zone");
@@ -90,16 +91,7 @@ async function collectFromMtalk({ persist = true } = {}) {
     duracaoMs: Date.now() - startedAt
   };
 
-  // Mesma divisao dos relatorios: TAG so conta onde ha atendente vinculado;
-  // inatividade conta tudo, inclusive quem esta aguardando na fila.
-  const comResponsavel = tickets.filter(hasResponsible);
-  const totals = {
-    totalTickets: tickets.length,
-    totalWithTag: comResponsavel.filter((ticket) => ticket.tagStatus === "COM_TAG").length,
-    totalWithoutTag: comResponsavel.filter((ticket) => ticket.tagStatus === "SEM_TAG").length,
-    totalWithoutAttendant: tickets.length - comResponsavel.length,
-    totalInactive: tickets.filter((ticket) => Number(ticket.inactivityMinutes || 0) > threshold).length
-  };
+  const totals = computeTotals(tickets, threshold);
 
   const saved = persist
     ? await saveSnapshot({ source: "mtalk-api", url: `${config.panelUrl}/tickets`, collectedAt, tickets })
@@ -174,10 +166,14 @@ function stopCollector() {
 }
 
 // Alertas da ultima leitura, no formato que o pop-up da extensao desenha.
-function getCurrentAlerts() {
+//
+// scope.attendant recorta a lista para um atendente so. Ticket SEM atendente
+// continua indo para todo mundo de proposito: ninguem e dono dele, e cliente
+// esquecido na fila e justamente o que nao pode passar despercebido.
+function getCurrentAlerts({ attendant = null } = {}) {
   const config = getMtalkConfig();
   const collection = lastCollection;
-  const tickets = collection?.tickets || [];
+  const tickets = scopeTickets(collection?.tickets || [], attendant);
   const threshold = collection?.thresholdMinutes ?? getInactivityThresholdMinutes();
   const identificados = tickets.filter((ticket) => String(ticket.clientName || "").trim());
   // Ticket aguardando na fila nao tem a quem cobrar a TAG, mas continua no
@@ -194,7 +190,9 @@ function getCurrentAlerts() {
     collectedAt: collection?.collectedAt || null,
     stale: ageMs === null || ageMs > staleAfterMs,
     thresholdMinutes: threshold,
-    totals: collection?.totals || null,
+    // Recalculado no recorte: os totais precisam contar o mesmo que as listas.
+    totals: collection ? computeTotals(tickets, threshold) : null,
+    scope: { attendant: attendant || null },
     lastError: lastRun.ok === false ? lastRun.error : null,
     missingTag: { total: missingTag.length, items: missingTag.slice(0, MAX_ALERT_ITEMS).map(toAlertItem) },
     inactive: { total: inactive.length, items: inactive.slice(0, MAX_ALERT_ITEMS).map(toAlertItem) }
@@ -217,6 +215,33 @@ function toAlertItem(ticket) {
 
 function hasResponsible(ticket) {
   return Boolean(String(ticket?.attendant || "").trim());
+}
+
+// Recorte por atendente: os tickets dele mais todos os que estao sem dono.
+function scopeTickets(tickets, attendant) {
+  const canonical = normalizeAttendantName(attendant);
+  if (!canonical) {
+    return tickets;
+  }
+
+  const alvo = canonical.toUpperCase();
+  return tickets.filter(
+    (ticket) => !hasResponsible(ticket) || normalizeAttendantName(ticket.attendant).toUpperCase() === alvo
+  );
+}
+
+// Mesma divisao dos relatorios: TAG so conta onde ha atendente vinculado;
+// inatividade conta tudo, inclusive quem esta aguardando na fila.
+function computeTotals(tickets, threshold) {
+  const comResponsavel = tickets.filter(hasResponsible);
+
+  return {
+    totalTickets: tickets.length,
+    totalWithTag: comResponsavel.filter((ticket) => ticket.tagStatus === "COM_TAG").length,
+    totalWithoutTag: comResponsavel.filter((ticket) => ticket.tagStatus === "SEM_TAG").length,
+    totalWithoutAttendant: tickets.length - comResponsavel.length,
+    totalInactive: tickets.filter((ticket) => Number(ticket.inactivityMinutes || 0) > threshold).length
+  };
 }
 
 // Os ids das filas monitoradas mudam pouco, entao ficam em cache.
@@ -403,11 +428,10 @@ async function fetchTicketPage({ config, status, pageNumber, queueIds, requests 
   return page;
 }
 
-function describeCollectorStatus() {
+function describeCollectorStatus({ isAdmin = true } = {}) {
   const config = getMtalkConfig();
-  return {
+  const comum = {
     configurado: config.isConfigured,
-    baseUrl: config.baseUrl,
     sessao: describeSession(),
     coletaAutomatica: {
       ativa: Boolean(schedulerTimer),
@@ -415,12 +439,26 @@ function describeCollectorStatus() {
       emAndamento: Boolean(runningCollection),
       ultimaExecucao: lastRun
     },
+    filasMonitoradas: getAllowedQueues(),
+    limiteInatividadeMinutos: getInactivityThresholdMinutes()
+  };
+
+  // Atendente ve o suficiente para saber se a coleta esta de pe; os numeros da
+  // operacao inteira e o diagnostico sao do ADMIN.
+  if (!isAdmin) {
+    return {
+      ...comum,
+      ultimaColeta: lastCollection ? { coletadoEm: lastCollection.collectedAt } : null
+    };
+  }
+
+  return {
+    ...comum,
+    baseUrl: config.baseUrl,
     ultimaColeta: lastCollection
       ? { coletadoEm: lastCollection.collectedAt, ...lastCollection.totals, diagnostico: lastCollection.diagnostics }
       : null,
     statusMonitorados: config.statuses,
-    filasMonitoradas: getAllowedQueues(),
-    limiteInatividadeMinutos: getInactivityThresholdMinutes(),
     maxConsultasContato: config.maxContactLookups,
     cacheFilas: {
       filas: queueCache.resolvedNames,

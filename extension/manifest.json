@@ -18,6 +18,8 @@
   ],
   "host_permissions": [
     "https://s11.mtalk.com.br/*",
+    "https://xn--gesto-dra.mcallsolutions.com.br/*",
+    "https://gestao.mcallsolutions.com.br/*",
     "http://localhost:3333/*",
     "http://127.0.0.1:3333/*"
   ],

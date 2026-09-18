@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
 import { api, getApiBaseUrl, setApiBaseUrl } from "../../services/api";
 import { formatDateTime } from "../../services/datetime";
+import TokenManager from "../../components/TokenManager";
+import ExtensionDownload from "../../components/ExtensionDownload";
 
-export default function SettingsPage() {
+export default function SettingsPage({ identity, onTokenTrocado }) {
   const [apiUrl, setApiUrl] = useState(getApiBaseUrl());
   const [feedback, setFeedback] = useState("");
   const [mtalk, setMtalk] = useState(null);
@@ -46,6 +48,7 @@ export default function SettingsPage() {
 
   const sessao = mtalk?.sessao || {};
   const execucao = mtalk?.coletaAutomatica?.ultimaExecucao || {};
+  const ehAdmin = Boolean(identity?.isAdmin);
 
   return (
     <section className="page-stack">
@@ -106,27 +109,37 @@ export default function SettingsPage() {
                 <tr>
                   <td>Ultima coleta gravada</td>
                   <td>
-                    {mtalk.ultimaColeta
-                      ? `${formatDateTime(mtalk.ultimaColeta.coletadoEm)} — ${mtalk.ultimaColeta.totalTickets} tickets em ${mtalk.ultimaColeta.diagnostico?.requisicoes ?? 0} requisicao(oes)`
-                      : "-"}
+                    {!mtalk.ultimaColeta
+                      ? "-"
+                      : ehAdmin
+                        ? `${formatDateTime(mtalk.ultimaColeta.coletadoEm)} — ${mtalk.ultimaColeta.totalTickets} tickets em ${mtalk.ultimaColeta.diagnostico?.requisicoes ?? 0} requisicao(oes)`
+                        : formatDateTime(mtalk.ultimaColeta.coletadoEm)}
                   </td>
                 </tr>
-                <tr>
-                  <td>Endereco da API</td>
-                  <td>{mtalk.baseUrl}</td>
-                </tr>
+                {/* Endereco, diagnostico e numeros da operacao inteira so vao
+                    para token de administrador. */}
+                {ehAdmin ? (
+                  <tr>
+                    <td>Endereco da API</td>
+                    <td>{mtalk.baseUrl}</td>
+                  </tr>
+                ) : null}
                 <tr>
                   <td>Filas monitoradas</td>
                   <td>{(mtalk.filasMonitoradas || []).join(", ")}</td>
                 </tr>
-                <tr>
-                  <td>Filas encontradas no MTalk</td>
-                  <td>{(mtalk.cacheFilas?.filas || []).join(", ") || "-"}</td>
-                </tr>
-                <tr>
-                  <td>Status lidos</td>
-                  <td>{(mtalk.statusMonitorados || []).join(", ")}</td>
-                </tr>
+                {ehAdmin ? (
+                  <tr>
+                    <td>Filas encontradas no MTalk</td>
+                    <td>{(mtalk.cacheFilas?.filas || []).join(", ") || "-"}</td>
+                  </tr>
+                ) : null}
+                {ehAdmin ? (
+                  <tr>
+                    <td>Status lidos</td>
+                    <td>{(mtalk.statusMonitorados || []).join(", ")}</td>
+                  </tr>
+                ) : null}
                 <tr>
                   <td>Limite de inatividade</td>
                   <td>{mtalk.limiteInatividadeMinutos} min</td>
@@ -136,6 +149,12 @@ export default function SettingsPage() {
           )}
         </div>
       </div>
+
+      <ExtensionDownload />
+
+      {ehAdmin ? (
+        <TokenManager authRequired={identity?.authRequired !== false} onTokenTrocado={onTokenTrocado} />
+      ) : null}
 
       <form className="settings-form" onSubmit={save}>
         <label>

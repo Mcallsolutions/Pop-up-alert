@@ -1,0 +1,32 @@
+# systemd unit da API. Copie para /etc/systemd/system/mcall.service e ajuste os
+# caminhos se o deploy nao estiver em /opt/mcall.
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mcall
+
+[Unit]
+Description=Mcall Ticket Tag API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcall
+Group=mcall
+WorkingDirectory=/opt/mcall
+EnvironmentFile=/opt/mcall/.env
+ExecStart=/usr/bin/node server/src/server.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# O processo so escreve no banco: o resto do disco fica somente leitura.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mcall
+
+[Install]
+WantedBy=multi-user.target

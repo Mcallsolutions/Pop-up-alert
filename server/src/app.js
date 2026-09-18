@@ -1,18 +1,31 @@
 require("dotenv").config();
 
+const fs = require("node:fs");
+const path = require("node:path");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { initializeDatabase } = require("./database");
+const { authenticate, requireAdmin } = require("./middleware/auth");
+const authRoutes = require("./routes/auth.routes");
 const mtalkRoutes = require("./routes/mtalk.routes");
 const reportRoutes = require("./routes/reports.routes");
 const aiRoutes = require("./routes/ai.routes");
+const extensionRoutes = require("./routes/extension.routes");
 
 // Painel em dev (Vite) e a extensao Chrome. Separe por virgula para liberar mais.
 const DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,chrome-extension://";
+// Build do painel (npm run build). Se existir, a propria API serve o painel:
+// e o que faz `npm start` sozinho entregar tudo, sem depender do nginx.
+const ADMIN_DIST_DIR = path.resolve(__dirname, "../../dist");
 
 const app = express();
+
+// Atras de um proxy (nginx), TRUST_PROXY=1 faz o Express ler o IP real do
+// X-Forwarded-For — sem isso o rate limit contaria todo mundo como o proxy.
+// Fora do proxy fica 0: assim ninguem forja o proprio IP mandando o cabecalho.
+app.set("trust proxy", Number(process.env.TRUST_PROXY || 0));
 
 app.use(helmet());
 app.use(express.json({ limit: "512kb" }));
@@ -41,9 +54,21 @@ app.get("/health", async (_req, res) => {
   });
 });
 
-app.use("/api/mtalk", requireDatabase, mtalkRoutes);
-app.use("/api/reports", requireDatabase, reportRoutes);
-app.use("/api/ai", requireDatabase, aiRoutes);
+// Cada rota abaixo do authenticate recebe req.auth com o recorte do token.
+// A aba IA manda para a OpenAI o recorte inteiro da operacao (nomes de
+// clientes, atendentes e empresas) e o resumo fica salvo para todos, entao ela
+// e so de ADMIN. /health e /api/auth/me ficam fora: sao o diagnostico e a
+// propria checagem de token.
+app.use("/api/auth", requireDatabase, authRoutes);
+app.use("/api/mtalk", requireDatabase, authenticate, mtalkRoutes);
+app.use("/api/reports", requireDatabase, authenticate, reportRoutes);
+app.use("/api/ai", requireDatabase, authenticate, requireAdmin, aiRoutes);
+// Download do .zip da extensao: qualquer token serve, porque quem instala e
+// a propria pessoa do atendimento. O pacote sai da pasta /extension, sem
+// token nem .env dentro.
+app.use("/api/extension", requireDatabase, authenticate, extensionRoutes);
+
+serveAdminPanel(app);
 
 app.use((_req, res) => {
   res.status(404).json({ error: "Rota nao encontrada" });
@@ -63,6 +88,22 @@ app.use((error, _req, res, _next) => {
 });
 
 module.exports = app;
+
+// Serve o painel ja compilado, quando ele existe. O painel nao usa rotas de
+// URL (a navegacao e por estado), entao basta o index.html na raiz alem dos
+// arquivos de /assets.
+function serveAdminPanel(instance) {
+  const indexFile = path.join(ADMIN_DIST_DIR, "index.html");
+
+  if (String(process.env.SERVE_ADMIN || "") === "0" || !fs.existsSync(indexFile)) {
+    return;
+  }
+
+  instance.use(express.static(ADMIN_DIST_DIR, { index: false, maxAge: "1h" }));
+  instance.get(["/", "/index.html"], (_req, res) => {
+    res.sendFile(indexFile);
+  });
+}
 
 // Garante a conexao/migrations antes das rotas que tocam o banco.
 async function requireDatabase(_req, _res, next) {

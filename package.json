@@ -12,7 +12,8 @@
     "dev:admin": "vite",
     "build": "vite build",
     "start": "node server/src/server.js",
-    "migrate": "node server/src/database/index.js"
+    "migrate": "node server/src/database/index.js",
+    "token": "node server/src/scripts/tokens.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

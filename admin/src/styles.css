@@ -669,3 +669,133 @@ tbody tr:hover {
     flex-direction: column;
   }
 }
+
+/* Tela de acesso (token) e o painel de emissao de tokens. */
+.token-gate {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.token-gate-card {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 32px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  background: var(--glass);
+  backdrop-filter: blur(12px);
+}
+
+.token-gate-card h1 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.token-gate-card > p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.token-gate-card label {
+  display: grid;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--text-2);
+}
+
+.token-gate-card input {
+  padding: 11px 13px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 0.95rem;
+}
+
+.token-gate-card input:focus-visible {
+  outline: none;
+  border-color: var(--green-border-strong);
+}
+
+.token-gate-card small,
+.token-revelado p {
+  color: var(--text-3);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.token-revelado {
+  display: grid;
+  gap: 12px;
+}
+
+.token-revelado code {
+  display: block;
+  padding: 12px;
+  border: 1px dashed var(--green-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-2);
+  color: var(--green);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.token-revelado-acoes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.extension-download {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.extension-info {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 260px;
+}
+
+.extension-info svg {
+  color: var(--green);
+  flex-shrink: 0;
+}
+
+.extension-info strong {
+  display: block;
+  font-size: 0.92rem;
+}
+
+.extension-info span {
+  color: var(--text-3);
+  font-size: 0.78rem;
+}
+
+.extension-steps {
+  margin: 18px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.extension-aviso {
+  margin: 14px 0 0;
+  color: var(--text-3);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}

@@ -5,17 +5,28 @@
 // GET /api/mtalk/alerts e repassamos para o content script desenhar o pop-up.
 // A chamada sai do service worker (e nao da pagina https do MTalk) porque a
 // pagina nao pode chamar http://localhost.
+//
+// Todo endereco que a extensao chamar precisa estar em host_permissions no
+// manifest.json — inclusive um dominio novo da API.
 
 const CONFIG_KEY = "mcall_config";
 const STATUS_KEY = "mcall_status";
 const MTALK_TICKETS_URL = "https://s11.mtalk.com.br/tickets*";
 
 const DEFAULT_CONFIG = {
-  apiBaseUrl: "http://localhost:3333"
+  // API hospedada. Em maquina de desenvolvimento troque por http://localhost:3333
+  // no popup ou nas opcoes da extensao.
+  apiBaseUrl: "https://xn--gesto-dra.mcallsolutions.com.br",
+  // Token da API LOCAL, emitido no painel ou por `npm run token`. E ele que diz
+  // de quem sao os alertas: cada atendente cola o seu. Nada a ver com o login
+  // do MTalk — a extensao continua sem tocar na sessao do MTalk.
+  apiToken: ""
 };
 
 const DEFAULT_STATUS = {
   apiStatus: "desconhecido",
+  // Atendente do token (vazio = token de administrador ou API em modo aberto).
+  scopeAttendant: "",
   lastError: "",
   lastFetchAt: null,
   collectedAt: null,
@@ -72,7 +83,7 @@ async function fetchAlerts() {
   const endpoint = `${config.apiBaseUrl}/api/mtalk/alerts`;
 
   try {
-    const response = await fetch(endpoint, { cache: "no-store" });
+    const response = await fetch(endpoint, { cache: "no-store", headers: authHeaders(config) });
     if (!response.ok) {
       throw new Error(await describeHttpFailure(response));
     }
@@ -81,6 +92,7 @@ async function fetchAlerts() {
     const totals = alerts.totals || {};
     const status = await updateStatus({
       apiStatus: "conectado",
+      scopeAttendant: alerts.scope?.attendant || "",
       lastError: alerts.lastError || "",
       lastFetchAt: new Date().toISOString(),
       collectedAt: alerts.collectedAt,
@@ -105,7 +117,7 @@ async function forceCollect() {
   const endpoint = `${config.apiBaseUrl}/api/mtalk/collect`;
 
   try {
-    const response = await fetch(endpoint, { method: "POST" });
+    const response = await fetch(endpoint, { method: "POST", headers: authHeaders(config) });
     if (!response.ok) {
       throw new Error(await describeHttpFailure(response));
     }
@@ -138,10 +150,28 @@ async function checkApiHealth() {
     }
 
     const health = await response.json();
-    const statusResponse = await fetch(`${config.apiBaseUrl}/api/mtalk/status`, { cache: "no-store" });
+    // /health responde sem token; o resto da API nao. Um 401 aqui e a forma
+    // mais direta de dizer "a API esta de pe, o seu token que nao serve".
+    const meResponse = await fetch(`${config.apiBaseUrl}/api/auth/me`, {
+      cache: "no-store",
+      headers: authHeaders(config)
+    });
+    if (!meResponse.ok) {
+      throw new Error(await describeHttpFailure(meResponse));
+    }
+
+    const me = await meResponse.json();
+    const statusResponse = await fetch(`${config.apiBaseUrl}/api/mtalk/status`, {
+      cache: "no-store",
+      headers: authHeaders(config)
+    });
     const mtalk = statusResponse.ok ? await statusResponse.json() : null;
-    const status = await updateStatus({ apiStatus: "conectado", lastError: "" });
-    return { ok: true, health, mtalk, status };
+    const status = await updateStatus({
+      apiStatus: "conectado",
+      scopeAttendant: me.attendant || "",
+      lastError: ""
+    });
+    return { ok: true, health, me, mtalk, status };
   } catch (error) {
     const status = await updateStatus({ apiStatus: "erro", lastError: describeFetchFailure(error, endpoint) });
     return { ok: false, error: status.lastError, status };
@@ -160,7 +190,24 @@ async function getStatus() {
 
 function normalizeConfig(config) {
   const apiBaseUrl = String(config.apiBaseUrl || "").trim().replace(/\/+$/, "");
-  return { apiBaseUrl: apiBaseUrl || DEFAULT_CONFIG.apiBaseUrl };
+  return {
+    apiBaseUrl: apiBaseUrl || DEFAULT_CONFIG.apiBaseUrl,
+    apiToken: normalizeToken(config.apiToken)
+  };
+}
+
+// Aceita o token colado cru, com "Bearer " na frente ou entre aspas — a mesma
+// tolerancia que o servidor tem com o MTALK_TOKEN.
+function normalizeToken(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^Bearer\s+/i, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+}
+
+function authHeaders(config) {
+  return config.apiToken ? { authorization: `Bearer ${config.apiToken}` } : {};
 }
 
 async function updateStatus(patch) {
@@ -176,6 +223,14 @@ async function describeHttpFailure(response) {
     detalhe = JSON.parse(corpo).error || detalhe;
   } catch (_error) {
     // corpo nao e JSON: usa o texto cru
+  }
+
+  if (response.status === 401) {
+    return "Token de acesso ausente, invalido ou revogado. Cole o seu token nas opcoes da extensao.";
+  }
+
+  if (response.status === 403) {
+    return detalhe || "Este token nao tem acesso a esta area.";
   }
 
   if (response.status === 404) {

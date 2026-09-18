@@ -11,8 +11,10 @@ const elements = {
   lastError: document.getElementById("lastError"),
   forceCollect: document.getElementById("forceCollect"),
   checkApi: document.getElementById("checkApi"),
+  scope: document.getElementById("scope"),
   configForm: document.getElementById("configForm"),
   apiBaseUrl: document.getElementById("apiBaseUrl"),
+  apiToken: document.getElementById("apiToken"),
   feedback: document.getElementById("feedback")
 };
 
@@ -30,7 +32,9 @@ async function load() {
   const response = await sendMessage({ type: "GET_STATUS" });
   if (response?.ok) {
     renderStatus(response.status);
-    elements.apiBaseUrl.value = response.config?.apiBaseUrl || "http://localhost:3333";
+    elements.apiBaseUrl.value = response.config?.apiBaseUrl || "https://xn--gesto-dra.mcallsolutions.com.br";
+    // O campo ja vem preenchido para que salvar a URL nao apague o token.
+    elements.apiToken.value = response.config?.apiToken || "";
   } else {
     setFeedback(response?.error || "Nao foi possivel carregar o status");
   }
@@ -63,7 +67,10 @@ async function checkApi() {
         : sessao?.ultimaRespostaOkEm
           ? "Token do MTalk aceito."
           : "Token do MTalk ainda nao testado.";
-    setFeedback(`API local conectada. ${mtalk}`);
+    const quem = !response.me?.authRequired
+      ? "API sem token exigido (modo aberto)."
+      : `Token de ${response.me.name}: ${response.me.attendant || "ve todos os atendentes"}.`;
+    setFeedback(`API local conectada. ${quem} ${mtalk}`);
   } else {
     setFeedback(response?.error || "API indisponivel.");
   }
@@ -72,10 +79,16 @@ async function checkApi() {
 
 async function saveConfig(event) {
   event.preventDefault();
-  const response = await sendMessage({ type: "SAVE_CONFIG", config: { apiBaseUrl: elements.apiBaseUrl.value } });
+  const response = await sendMessage({
+    type: "SAVE_CONFIG",
+    config: { apiBaseUrl: elements.apiBaseUrl.value, apiToken: elements.apiToken.value }
+  });
   if (response?.ok) {
     setFeedback("Configuracao salva.");
     elements.apiBaseUrl.value = response.config.apiBaseUrl;
+    elements.apiToken.value = response.config.apiToken;
+    await sendMessage({ type: "FETCH_ALERTS" });
+    await load();
   } else {
     setFeedback(response?.error || "Erro ao salvar configuracao");
   }
@@ -93,6 +106,7 @@ function renderStatus(status = {}) {
     : status.stale
       ? "Coleta desatualizada: alertas ocultos"
       : "Alertas em dia";
+  elements.scope.textContent = status.scopeAttendant || "todos os atendentes";
   elements.lastError.textContent = status.lastError || "-";
   elements.errorRow.hidden = !status.lastError;
 

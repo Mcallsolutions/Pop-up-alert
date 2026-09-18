@@ -1,5 +1,6 @@
 const form = document.getElementById("optionsForm");
 const apiBaseUrl = document.getElementById("apiBaseUrl");
+const apiToken = document.getElementById("apiToken");
 const feedback = document.getElementById("feedback");
 
 document.addEventListener("DOMContentLoaded", loadConfig);
@@ -11,12 +12,17 @@ async function loadConfig() {
     feedback.textContent = response?.error || "Nao foi possivel carregar as opcoes";
     return;
   }
-  apiBaseUrl.value = response.config.apiBaseUrl || "http://localhost:3333";
+  apiBaseUrl.value = response.config.apiBaseUrl || "https://xn--gesto-dra.mcallsolutions.com.br";
+  // Preenchido para que salvar a URL nao apague o token.
+  apiToken.value = response.config.apiToken || "";
 }
 
 async function saveConfig(event) {
   event.preventDefault();
-  const response = await sendMessage({ type: "SAVE_CONFIG", config: { apiBaseUrl: apiBaseUrl.value } });
+  const response = await sendMessage({
+    type: "SAVE_CONFIG",
+    config: { apiBaseUrl: apiBaseUrl.value, apiToken: apiToken.value }
+  });
   feedback.textContent = response?.ok ? "Configuracao salva." : response?.error || "Erro ao salvar configuracao";
 }
 

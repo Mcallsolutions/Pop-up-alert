@@ -27,7 +27,15 @@
       <form id="optionsForm" class="config">
         <label>
           URL da API
-          <input id="apiBaseUrl" name="apiBaseUrl" type="url" placeholder="http://localhost:3333" />
+          <input id="apiBaseUrl" name="apiBaseUrl" type="url" placeholder="https://gestao.mcallsolutions.com.br" />
+        </label>
+        <label>
+          Seu token de acesso
+          <input id="apiToken" name="apiToken" type="password" placeholder="mca_..." autocomplete="off" />
+          <small>
+            Emitido no painel (Configuracoes) ou por <code>npm run token</code>. E ele que define de quem sao os
+            alertas: cada atendente cola o seu. Tickets sem atendente aparecem para todos.
+          </small>
         </label>
         <button type="submit">Salvar configuracao</button>
       </form>

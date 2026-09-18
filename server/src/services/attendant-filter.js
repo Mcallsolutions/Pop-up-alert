@@ -11,7 +11,7 @@ const ATTENDANT_ALIASES = new Map([
   ["ALEKSANDRO", "Aleksandro"]
 ]);
 // Sufixos de empresa/conexao que alguns cadastros levam junto do nome.
-const COMPANY_TOKENS = ["NETFIBRA", "MIX", "IDEZ", "TERRA", "TERRANET", "MIXTEL", "TELECOM", "FIBRA", "BDG", "AIA"];
+const COMPANY_TOKENS = ["NETFIBRA", "MIX", "IDEZ", "TERRA", "TERRANET", "MIXTEL", "TELECOM", "BDG", "AIA"];
 
 function normalizeAttendantName(value) {
   const text = cleanText(value);

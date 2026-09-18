@@ -202,6 +202,28 @@ const MIGRATIONS = {
     );
 
     CREATE INDEX IF NOT EXISTS idx_ai_summaries_created_at ON ai_summaries(created_at);
+  `,
+  "002_api_tokens.sql": `
+    -- Tokens de acesso a ESTA API. Nada a ver com MTALK_TOKEN, que continua
+    -- unico, no .env e usado so pela coleta: aqui o token apenas recorta o que
+    -- cada pessoa le do que ja foi coletado.
+    --
+    -- Guardamos so o SHA-256 do token; o valor cru aparece uma unica vez, na
+    -- criacao. attendant vazio = ve tudo (perfil ADMIN).
+    CREATE TABLE IF NOT EXISTS api_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      attendant TEXT,
+      role TEXT NOT NULL DEFAULT 'ATENDENTE' CHECK (role IN ('ADMIN', 'ATENDENTE')),
+      token_hash TEXT NOT NULL UNIQUE,
+      token_hint TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      last_used_at TEXT,
+      revoked_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_api_tokens_is_active ON api_tokens(is_active);
   `
 };
 

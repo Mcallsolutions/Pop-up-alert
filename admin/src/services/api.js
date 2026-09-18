@@ -1,4 +1,8 @@
 const API_URL_KEY = "mcall_admin_api_url";
+// Token de acesso a esta API (nao e o token do MTalk). Fica so neste navegador
+// e define o recorte: token de atendente ve os proprios tickets e os que estao
+// sem atendente.
+const API_TOKEN_KEY = "mcall_admin_token";
 
 // Vazio = mesma origem do painel. Em dev o Vite faz proxy de /api para a API
 // local (http://localhost:3333).
@@ -20,7 +24,40 @@ export function setApiBaseUrl(value) {
   localStorage.setItem(API_URL_KEY, normalized);
 }
 
+export function getApiToken() {
+  return String(localStorage.getItem(API_TOKEN_KEY) || "");
+}
+
+// Aceita o token colado cru, com "Bearer " na frente ou entre aspas.
+export function setApiToken(value) {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/^Bearer\s+/i, "")
+    .replace(/^["']|["']$/g, "")
+    .trim();
+
+  if (!normalized) {
+    localStorage.removeItem(API_TOKEN_KEY);
+    return "";
+  }
+
+  localStorage.setItem(API_TOKEN_KEY, normalized);
+  return normalized;
+}
+
 export const api = {
+  me() {
+    return request("/api/auth/me");
+  },
+  tokens() {
+    return request("/api/auth/tokens");
+  },
+  createToken(payload) {
+    return request("/api/auth/tokens", { method: "POST", body: payload });
+  },
+  revokeToken(id) {
+    return request(`/api/auth/tokens/${id}`, { method: "DELETE" });
+  },
   summary(filters = {}) {
     return request(`/api/reports/summary${toQuery(filters)}`);
   },
@@ -47,6 +84,12 @@ export const api = {
   },
   byQueue(filters = {}) {
     return request(`/api/reports/by-queue${toQuery(filters)}`);
+  },
+  extensionPackage() {
+    return request("/api/extension/package");
+  },
+  downloadExtension() {
+    return download("/api/extension/download", "extensao.zip");
   },
   mtalkStatus() {
     return request("/api/mtalk/status");
@@ -81,9 +124,13 @@ export const api = {
 };
 
 async function request(path, options = {}) {
+  const token = getApiToken();
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: options.method || "GET",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {})
+    },
     body: options.body ? JSON.stringify(options.body) : undefined
   });
 
@@ -91,10 +138,52 @@ async function request(path, options = {}) {
   const data = contentType.includes("application/json") ? await response.json() : await response.text();
 
   if (!response.ok) {
-    throw new Error(data?.error || data || `Erro ${response.status}`);
+    const error = new Error(data?.error || data || `Erro ${response.status}`);
+    // O painel usa isto para voltar a pedir o token em vez de so mostrar o erro.
+    error.status = response.status;
+    error.unauthorized = response.status === 401;
+    throw error;
   }
 
   return data;
+}
+
+// Download autenticado: o token vai no cabecalho, entao nao da para apontar um
+// <a href> direto para a rota. Busca o arquivo, vira blob e dispara o save.
+async function download(path, fallbackFileName) {
+  const token = getApiToken();
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    headers: token ? { authorization: `Bearer ${token}` } : {}
+  });
+
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") || "";
+    const data = contentType.includes("application/json") ? await response.json() : await response.text();
+    const error = new Error(data?.error || data || `Erro ${response.status}`);
+    error.status = response.status;
+    error.unauthorized = response.status === 401;
+    throw error;
+  }
+
+  const fileName = fileNameFromDisposition(response.headers.get("content-disposition")) || fallbackFileName;
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+
+  return { fileName, size: blob.size };
+}
+
+// Le o nome do arquivo que a API mandou no content-disposition.
+function fileNameFromDisposition(header) {
+  const match = /filename="?([^";]+)"?/i.exec(String(header || ""));
+  return match ? match[1] : "";
 }
 
 function toQuery(filters) {

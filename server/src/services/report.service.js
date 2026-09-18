@@ -17,9 +17,15 @@ const HAS_RESPONSIBLE_SQL = `(trim(coalesce(attendant, '')) <> '')`;
 
 // Prefixo comum das consultas: aplica os filtros e mantem, de cada ticket
 // repetido entre coletas, apenas a leitura mais recente.
-function buildRankedTicketsSql(where) {
+//
+// Sao dois niveis de proposito. O recorte do token NAO pode entrar no ranking:
+// se entrasse, um ticket que hoje e de outro atendente — mas que ja esteve sem
+// atendente — teria como "leitura mais recente visivel" a leitura velha, e
+// voltaria a aparecer como aguardando na fila. Primeiro decidimos qual e a
+// leitura atual de cada ticket, depois filtramos por ela.
+function buildRankedTicketsSql(where, scopeSql) {
   return `
-      WITH ranked AS (
+      WITH todas_leituras AS (
         SELECT *,
           ROW_NUMBER() OVER (
             PARTITION BY external_ticket_id
@@ -27,6 +33,10 @@ function buildRankedTicketsSql(where) {
           ) AS rowNumber
         FROM tickets
         ${where}
+      ),
+      ranked AS (
+        SELECT * FROM todas_leituras
+        WHERE rowNumber = 1${scopeSql ? ` AND ${scopeSql}` : ""}
       )`;
 }
 
@@ -51,14 +61,14 @@ const TICKET_COLUMNS_SQL = `
 
 async function getSummary(filters = {}) {
   const database = await getDatabase();
-  const { where, params } = buildTicketFilters(filters);
+  const { where, params, rankedSql } = buildTicketFilters(filters);
   const readings = await database
     .prepare(`SELECT COUNT(DISTINCT snapshot_id) AS "totalReadings" FROM tickets ${where}`)
     .get(...params);
   const row = await database
     .prepare(
       `
-      ${buildRankedTicketsSql(where)}
+      ${rankedSql}
       SELECT
         COUNT(*) AS "totalTicketsProcessed",
         SUM(CASE WHEN tag_status = 'COM_TAG' AND ${HAS_RESPONSIBLE_SQL} THEN 1 ELSE 0 END) AS "totalWithTag",
@@ -97,9 +107,8 @@ async function getSummary(filters = {}) {
 // aguardam atendente em "semAtendenteOcultos", em vez de virarem linhas.
 async function getMissingTags(filters = {}) {
   const database = await getDatabase();
-  const { where, params } = buildTicketFilters(filters);
+  const { where, params, rankedSql } = buildTicketFilters(filters);
   const limit = readLimit(filters.limit);
-  const rankedSql = buildRankedTicketsSql(where);
 
   const rows = await database
     .prepare(
@@ -152,7 +161,8 @@ async function getFilterOptions(filters = {}) {
   const { where, params } = buildTicketFilters({
     day: filters.day,
     startDate: filters.startDate,
-    endDate: filters.endDate
+    endDate: filters.endDate,
+    scopeAttendant: filters.scopeAttendant
   });
 
   const [attendants, companies, queues, clients] = await Promise.all([
@@ -188,11 +198,11 @@ async function selectDistinctValues(database, column, where, params) {
 
 async function getInactivitySummary(filters = {}) {
   const database = await getDatabase();
-  const { where, params } = buildTicketFilters(filters);
+  const { where, params, rankedSql } = buildTicketFilters(filters);
   const row = await database
     .prepare(
       `
-      ${buildRankedTicketsSql(where)}
+      ${rankedSql}
       SELECT
         COUNT(*) AS "inactiveTickets",
         MAX(COALESCE(inactivity_minutes, 0)) AS "maxInactivityMinutes",
@@ -217,11 +227,11 @@ async function getInactivitySummary(filters = {}) {
 
 async function getInactiveTickets(filters = {}) {
   const database = await getDatabase();
-  const { where, params } = buildTicketFilters(filters);
+  const { where, params, rankedSql } = buildTicketFilters(filters);
   const rows = await database
     .prepare(
       `
-      ${buildRankedTicketsSql(where)}
+      ${rankedSql}
       SELECT ${TICKET_COLUMNS_SQL}
       FROM ranked
       WHERE rowNumber = 1
@@ -246,11 +256,11 @@ async function getInactivityByCompany(filters = {}) {
 
 async function getInactivityGroupedBy(filters, expression, alias, extraCondition = "1 = 1") {
   const database = await getDatabase();
-  const { where, params } = buildTicketFilters(filters);
+  const { where, params, rankedSql } = buildTicketFilters(filters);
   const rows = await database
     .prepare(
       `
-      ${buildRankedTicketsSql(where)}
+      ${rankedSql}
       SELECT
         ${expression} AS ${alias},
         COUNT(*) AS "inactiveTickets",
@@ -281,11 +291,11 @@ async function getReportByQueue(filters = {}) {
 // Relatorio de TAG agrupado. Ticket aguardando atendente fica de fora.
 async function getTagReportGroupedBy(filters, expression, alias) {
   const database = await getDatabase();
-  const { where, params } = buildTicketFilters(filters);
+  const { where, params, rankedSql } = buildTicketFilters(filters);
   const rows = await database
     .prepare(
       `
-      ${buildRankedTicketsSql(where)}
+      ${rankedSql}
       SELECT
         ${expression} AS ${alias},
         COUNT(*) AS "totalTickets",
@@ -337,10 +347,37 @@ function buildTicketFilters(filters = {}) {
   addNormalizedLikeFilter(conditions, params, "company", filters.company);
   addLikeFilter(conditions, params, "client_name", filters.clientName);
 
+  // O recorte do token entra por ultimo nas duas formas, entao a ordem dos
+  // parametros e a mesma para `where` e para `rankedSql`: primeiro os filtros,
+  // depois o atendente do token.
+  const scope = buildScopeCondition(filters.scopeAttendant);
+  const baseWhere = `WHERE ${conditions.join(" AND ")}`;
+
   // Sempre ha ao menos o recorte de filas monitoradas.
   return {
-    where: `WHERE ${conditions.join(" AND ")}`,
-    params
+    // Ja com o recorte: serve as consultas que leem a tabela direto.
+    where: scope.sql ? `WHERE ${[...conditions, scope.sql].join(" AND ")}` : baseWhere,
+    params: [...params, ...scope.params],
+    // Consultas que precisam da leitura mais recente de cada ticket usam este.
+    rankedSql: buildRankedTicketsSql(baseWhere, scope.sql)
+  };
+}
+
+// Recorte do token de atendente: os tickets dele mais TODOS os que estao sem
+// atendente — ninguem e dono de um ticket parado na fila, e e justamente esse
+// que nao pode ficar sem resposta.
+//
+// Aqui a comparacao e exata (attendant ja e gravado canonico), nao LIKE: com
+// LIKE, o token de "Gabriel" abriria os tickets de "Gabriell Carvalho".
+function buildScopeCondition(value) {
+  const canonical = normalizeAttendantName(value);
+  if (!canonical) {
+    return { sql: "", params: [] };
+  }
+
+  return {
+    sql: `(NOT ${HAS_RESPONSIBLE_SQL} OR UPPER(trim(attendant)) = UPPER(?))`,
+    params: [canonical]
   };
 }
 

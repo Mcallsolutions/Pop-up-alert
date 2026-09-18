@@ -7,14 +7,15 @@ const {
 
 const router = express.Router();
 
-// Alertas da ultima coleta, consumidos pelo pop-up da extensao.
-router.get("/alerts", (_req, res) => {
-  res.json(getCurrentAlerts());
+// Alertas da ultima coleta, consumidos pelo pop-up da extensao. O token diz de
+// quem sao: atendente recebe os proprios tickets e os que estao sem atendente.
+router.get("/alerts", (req, res) => {
+  res.json(getCurrentAlerts({ attendant: req.auth?.scopeAttendant || null }));
 });
 
 // Estado da integracao: sessao, agendamento e ultima coleta, sem expor token.
-router.get("/status", (_req, res) => {
-  res.json(describeCollectorStatus());
+router.get("/status", (req, res) => {
+  res.json(describeCollectorStatus({ isAdmin: Boolean(req.auth?.isAdmin) }));
 });
 
 // Dispara uma coleta agora. dryRun=1 le a API e devolve o resultado sem gravar.
