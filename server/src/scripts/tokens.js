@@ -1,7 +1,8 @@
-// Gestao dos tokens de acesso a API local pela linha de comando.
+// Gestao dos tokens da extensao (pop-up) pela linha de comando. O painel de
+// administracao nao usa token: entra com usuario e senha (npm run admin).
 //
-// O primeiro token sai daqui: enquanto nao existe nenhum, a API fica em modo
-// aberto — e e por isso que o painel tambem consegue emitir o primeiro.
+// Enquanto nao existe nenhum token ativo, as rotas da extensao ficam em modo
+// aberto. Os tokens tambem podem ser emitidos pelo painel, em Configuracoes.
 //
 //   npm run token -- listar
 //   npm run token -- criar --nome "Stephanie" --atendente "Stephanie"
@@ -21,7 +22,7 @@ Uso: npm run token -- <comando> [opcoes]
 Comandos:
   listar                                     lista os tokens (sem revelar nenhum)
   criar --nome "<rotulo>" --atendente "<nome>"   token de atendente
-  criar --nome "<rotulo>" --admin                token de administrador (ve tudo)
+  criar --nome "<rotulo>" --admin                token que ve todos os alertas
   revogar --id <id>                          desativa um token
 `.trim();
 
@@ -56,7 +57,7 @@ async function comandoListar() {
   const { items } = await listTokens();
 
   if (!items.length) {
-    console.log("\nNenhum token cadastrado: a API esta em modo aberto (todo mundo ve tudo).\n");
+    console.log("\nNenhum token cadastrado: a extensao esta em modo aberto (todo mundo ve tudo).\n");
     return;
   }
 
@@ -82,13 +83,13 @@ async function comandoCriar(args) {
 
   const escopo =
     record.role === "ADMIN"
-      ? "Ve todos os tickets e a aba IA."
+      ? "Ve os alertas de todos os atendentes."
       : `Ve os tickets de ${record.attendant} e todos os que estao sem atendente.`;
 
   console.log(`\nToken #${record.id} criado para ${record.name} [${record.role}].`);
   console.log(escopo);
   console.log("\n  " + token + "\n");
-  console.log("Ele nao volta a aparecer. Cole no painel (tela de acesso) ou nas opcoes da extensao.\n");
+  console.log("Ele nao volta a aparecer. Cole nas opcoes da extensao (ou no popup).\n");
 }
 
 async function comandoRevogar(args) {

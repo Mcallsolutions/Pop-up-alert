@@ -5,9 +5,7 @@ import AiSummaryCard from "../../components/AiSummaryCard";
 import { api } from "../../services/api";
 import { formatDateTime } from "../../services/datetime";
 
-// O resumo da IA e da operacao inteira, entao so aparece para quem tem token de
-// administrador — e o mesmo recorte da aba IA.
-export default function Dashboard({ isAdmin = false }) {
+export default function Dashboard() {
   const [filters, setFilters] = useState(emptyFilters);
   const [summary, setSummary] = useState(null);
   const [attendants, setAttendants] = useState([]);
@@ -47,10 +45,8 @@ export default function Dashboard({ isAdmin = false }) {
 
   useEffect(() => {
     load();
-    if (isAdmin) {
-      loadAiSummary();
-    }
-  }, [isAdmin]);
+    loadAiSummary();
+  }, []);
 
   function updateFilter(key, value) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -96,12 +92,10 @@ export default function Dashboard({ isAdmin = false }) {
         <Metric label="Ultima atualizacao" value={formatDateTime(summary?.lastCollectedAt)} compact />
       </div>
 
-      {isAdmin ? (
-        <AiSummaryCard
-          summary={aiSummary}
-          emptyMessage="Nenhum resumo gerado ainda. Abra a aba IA para gerar o primeiro."
-        />
-      ) : null}
+      <AiSummaryCard
+        summary={aiSummary}
+        emptyMessage="Nenhum resumo gerado ainda. Abra a aba IA para gerar o primeiro."
+      />
 
       <div className="two-column">
         <ReportTable title="Por atendente" rows={attendants} labelKey="attendant" loading={loading} />

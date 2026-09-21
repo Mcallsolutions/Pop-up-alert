@@ -1,8 +1,11 @@
 const API_URL_KEY = "mcall_admin_api_url";
-// Token de acesso a esta API (nao e o token do MTalk). Fica so neste navegador
-// e define o recorte: token de atendente ve os proprios tickets e os que estao
-// sem atendente.
-const API_TOKEN_KEY = "mcall_admin_token";
+// Sessao do login do painel (usuario e senha). Os tokens por pessoa sao so da
+// extensao: o painel nao aceita mais token.
+const SESSION_KEY = "mcall_admin_session";
+// Chave da epoca em que o painel entrava com token: removida para nao ficar
+// um token de extensao esquecido no navegador.
+localStorage.removeItem("mcall_admin_token");
+export const SESSION_EXPIRED_EVENT = "mcall:session-expired";
 
 // Vazio = mesma origem do painel. Em dev o Vite faz proxy de /api para a API
 // local (http://localhost:3333).
@@ -24,30 +27,36 @@ export function setApiBaseUrl(value) {
   localStorage.setItem(API_URL_KEY, normalized);
 }
 
-export function getApiToken() {
-  return String(localStorage.getItem(API_TOKEN_KEY) || "");
+function getSession() {
+  return String(localStorage.getItem(SESSION_KEY) || "");
 }
 
-// Aceita o token colado cru, com "Bearer " na frente ou entre aspas.
-export function setApiToken(value) {
-  const normalized = String(value || "")
-    .trim()
-    .replace(/^Bearer\s+/i, "")
-    .replace(/^["']|["']$/g, "")
-    .trim();
-
-  if (!normalized) {
-    localStorage.removeItem(API_TOKEN_KEY);
-    return "";
+function setSession(value) {
+  if (!value) {
+    localStorage.removeItem(SESSION_KEY);
+    return;
   }
-
-  localStorage.setItem(API_TOKEN_KEY, normalized);
-  return normalized;
+  localStorage.setItem(SESSION_KEY, value);
 }
 
 export const api = {
-  me() {
-    return request("/api/auth/me");
+  async login(username, password) {
+    const result = await request("/api/auth/login", { method: "POST", body: { username, password } });
+    setSession(result.session);
+    return result.user;
+  },
+  async logout() {
+    try {
+      await request("/api/auth/logout", { method: "POST" });
+    } finally {
+      setSession("");
+    }
+  },
+  session() {
+    if (!getSession()) {
+      return Promise.reject(Object.assign(new Error("Sem sessao."), { status: 401, unauthorized: true }));
+    }
+    return request("/api/auth/session");
   },
   tokens() {
     return request("/api/auth/tokens");
@@ -124,12 +133,12 @@ export const api = {
 };
 
 async function request(path, options = {}) {
-  const token = getApiToken();
+  const session = getSession();
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method: options.method || "GET",
     headers: {
       "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {})
+      ...(session ? { authorization: `Bearer ${session}` } : {})
     },
     body: options.body ? JSON.stringify(options.body) : undefined
   });
@@ -138,31 +147,24 @@ async function request(path, options = {}) {
   const data = contentType.includes("application/json") ? await response.json() : await response.text();
 
   if (!response.ok) {
-    const error = new Error(data?.error || data || `Erro ${response.status}`);
-    // O painel usa isto para voltar a pedir o token em vez de so mostrar o erro.
-    error.status = response.status;
-    error.unauthorized = response.status === 401;
-    throw error;
+    throw toApiError(response, data);
   }
 
   return data;
 }
 
-// Download autenticado: o token vai no cabecalho, entao nao da para apontar um
-// <a href> direto para a rota. Busca o arquivo, vira blob e dispara o save.
+// Download autenticado: a sessao vai no cabecalho, entao nao da para apontar
+// um <a href> direto para a rota. Busca o arquivo, vira blob e dispara o save.
 async function download(path, fallbackFileName) {
-  const token = getApiToken();
+  const session = getSession();
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
-    headers: token ? { authorization: `Bearer ${token}` } : {}
+    headers: session ? { authorization: `Bearer ${session}` } : {}
   });
 
   if (!response.ok) {
     const contentType = response.headers.get("content-type") || "";
     const data = contentType.includes("application/json") ? await response.json() : await response.text();
-    const error = new Error(data?.error || data || `Erro ${response.status}`);
-    error.status = response.status;
-    error.unauthorized = response.status === 401;
-    throw error;
+    throw toApiError(response, data);
   }
 
   const fileName = fileNameFromDisposition(response.headers.get("content-disposition")) || fallbackFileName;
@@ -178,6 +180,21 @@ async function download(path, fallbackFileName) {
   URL.revokeObjectURL(url);
 
   return { fileName, size: blob.size };
+}
+
+// Um 401 com sessao guardada = sessao expirada, encerrada ou usuario
+// desativado: descarta a sessao e avisa o App, que volta para o login.
+function toApiError(response, data) {
+  const error = new Error(data?.error || data || `Erro ${response.status}`);
+  error.status = response.status;
+  error.unauthorized = response.status === 401;
+
+  if (error.unauthorized && getSession()) {
+    setSession("");
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+  }
+
+  return error;
 }
 
 // Le o nome do arquivo que a API mandou no content-disposition.

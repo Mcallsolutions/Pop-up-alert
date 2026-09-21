@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { KeyRound, Plus, Trash2 } from "lucide-react";
-import { api, setApiToken } from "../services/api";
+import { Plus, Trash2 } from "lucide-react";
+import { api } from "../services/api";
 import { formatDateTime } from "../services/datetime";
 
 const NOVO_VAZIO = { name: "", attendant: "", role: "ATENDENTE" };
 
-// Emissao e revogacao dos tokens de acesso a esta API. So ADMIN chega aqui.
-export default function TokenManager({ authRequired, onTokenTrocado }) {
+// Emissao e revogacao dos tokens da extensao (pop-up). Cada token identifica
+// um atendente e recorta os alertas que chegam no navegador dele. O painel em
+// si nao usa token: entra com usuario e senha.
+export default function TokenManager() {
   const [items, setItems] = useState([]);
   const [novo, setNovo] = useState(NOVO_VAZIO);
   const [criado, setCriado] = useState(null);
@@ -56,22 +58,16 @@ export default function TokenManager({ authRequired, onTokenTrocado }) {
     }
   }
 
-  // Usar o token recem-criado neste navegador. E o caminho normal para o
-  // primeiro token: sem ele, criar o primeiro deslogaria o painel na hora.
-  function usarAqui() {
-    setApiToken(criado.token);
-    setCriado(null);
-    onTokenTrocado?.();
-  }
+  const modoAberto = !carregando && !erro && !items.some((item) => item.isActive);
 
   return (
     <div className="table-panel">
-      <h3>Acessos e tokens</h3>
+      <h3>Tokens da extensao</h3>
 
-      {!authRequired ? (
+      {modoAberto ? (
         <p className="notice warning">
-          Nenhum token ativo: a API esta <strong>aberta</strong> e qualquer um que a alcance ve tudo. Ao criar o
-          primeiro token ela passa a exigir token de todo mundo — inclusive deste painel e da extensao.
+          Nenhum token ativo: a extensao esta <strong>aberta</strong> e qualquer um que alcance a API recebe todos os
+          alertas. Ao criar o primeiro token, a extensao passa a exigir o token de cada atendente.
         </p>
       ) : null}
 
@@ -81,14 +77,10 @@ export default function TokenManager({ authRequired, onTokenTrocado }) {
         <div className="notice success token-revelado">
           <p>
             Token de <strong>{criado.item.name}</strong> criado. Ele <strong>nao aparece de novo</strong>: copie agora
-            e entregue para a pessoa.
+            e entregue para a pessoa colar nas opcoes da extensao.
           </p>
           <code>{criado.token}</code>
           <div className="token-revelado-acoes">
-            <button className="secondary-button" type="button" onClick={usarAqui}>
-              <KeyRound aria-hidden="true" size={16} />
-              Usar neste painel
-            </button>
             <button className="link-button" type="button" onClick={() => setCriado(null)}>
               Ja copiei
             </button>
@@ -119,7 +111,7 @@ export default function TokenManager({ authRequired, onTokenTrocado }) {
                   <td>{item.name}</td>
                   <td>
                     {item.role === "ADMIN" ? (
-                      <span className="badge ativo">tudo (ADMIN)</span>
+                      <span className="badge ativo">todos os alertas</span>
                     ) : (
                       `${item.attendant} + tickets sem atendente`
                     )}
@@ -159,7 +151,7 @@ export default function TokenManager({ authRequired, onTokenTrocado }) {
           Perfil
           <select value={novo.role} onChange={(event) => setNovo({ ...novo, role: event.target.value })}>
             <option value="ATENDENTE">Atendente (ve os proprios tickets)</option>
-            <option value="ADMIN">Administrador (ve tudo e a aba IA)</option>
+            <option value="ADMIN">Supervisao (recebe os alertas de todos)</option>
           </select>
         </label>
 

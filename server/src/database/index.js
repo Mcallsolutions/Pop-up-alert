@@ -224,6 +224,32 @@ const MIGRATIONS = {
     );
 
     CREATE INDEX IF NOT EXISTS idx_api_tokens_is_active ON api_tokens(is_active);
+  `,
+  "003_admin_users.sql": `
+    -- Login do painel de administracao. Os tokens de api_tokens ficam so para a
+    -- extensao; o painel entra com usuario e senha e recebe uma sessao.
+    --
+    -- A senha e guardada como hash scrypt com sal proprio; a sessao, como o
+    -- SHA-256 do valor entregue ao navegador.
+    CREATE TABLE IF NOT EXISTS admin_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      last_login_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS admin_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_admin_sessions_user_id ON admin_sessions(user_id);
   `
 };
 

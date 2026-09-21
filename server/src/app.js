@@ -7,7 +7,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const { initializeDatabase } = require("./database");
-const { authenticate, requireAdmin } = require("./middleware/auth");
+const { authenticate, authenticatePanel } = require("./middleware/auth");
 const authRoutes = require("./routes/auth.routes");
 const mtalkRoutes = require("./routes/mtalk.routes");
 const reportRoutes = require("./routes/reports.routes");
@@ -54,19 +54,19 @@ app.get("/health", async (_req, res) => {
   });
 });
 
-// Cada rota abaixo do authenticate recebe req.auth com o recorte do token.
-// A aba IA manda para a OpenAI o recorte inteiro da operacao (nomes de
-// clientes, atendentes e empresas) e o resumo fica salvo para todos, entao ela
-// e so de ADMIN. /health e /api/auth/me ficam fora: sao o diagnostico e a
-// propria checagem de token.
+// Duas portas de entrada (ver middleware/auth.js):
+// - authenticate: rotas que a extensao usa (/api/mtalk). Aceita o token da
+//   pessoa, que recorta os alertas, ou a sessao do painel;
+// - authenticatePanel: o resto do painel (relatorios, IA, download da
+//   extensao, gestao de tokens). So sessao de login com usuario e senha.
+// /api/auth cuida da propria autenticacao rota a rota (login, sessao, /me).
 app.use("/api/auth", requireDatabase, authRoutes);
 app.use("/api/mtalk", requireDatabase, authenticate, mtalkRoutes);
-app.use("/api/reports", requireDatabase, authenticate, reportRoutes);
-app.use("/api/ai", requireDatabase, authenticate, requireAdmin, aiRoutes);
-// Download do .zip da extensao: qualquer token serve, porque quem instala e
-// a propria pessoa do atendimento. O pacote sai da pasta /extension, sem
-// token nem .env dentro.
-app.use("/api/extension", requireDatabase, authenticate, extensionRoutes);
+app.use("/api/reports", requireDatabase, authenticatePanel, reportRoutes);
+app.use("/api/ai", requireDatabase, authenticatePanel, aiRoutes);
+// Download do .zip da extensao, pelo painel. O pacote sai da pasta
+// /extension, sem token nem .env dentro.
+app.use("/api/extension", requireDatabase, authenticatePanel, extensionRoutes);
 
 serveAdminPanel(app);
 

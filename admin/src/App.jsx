@@ -5,84 +5,86 @@ import Inactivity from "./pages/Inactivity";
 import Reports from "./pages/Reports";
 import AiPage from "./pages/AI";
 import SettingsPage from "./pages/Settings";
-import TokenGate from "./components/TokenGate";
-import { api, setApiToken } from "./services/api";
+import LoginGate from "./components/LoginGate";
+import { SESSION_EXPIRED_EVENT, api } from "./services/api";
 
 const views = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "reports", label: "Relatorios", icon: BarChart3 },
   { id: "inactivity", label: "Inatividade", icon: Clock },
-  // A aba IA manda o recorte inteiro para a OpenAI e o resumo fica salvo para
-  // todos, entao ela e so de quem tem token de administrador.
-  { id: "ai", label: "IA", icon: Sparkles, adminOnly: true },
+  { id: "ai", label: "IA", icon: Sparkles },
   { id: "settings", label: "Configuracoes", icon: Settings }
 ];
 
-// O painel usa o mesmo token da API: quem entra com token de atendente ve so os
-// proprios tickets (mais os que estao sem atendente) em todas as telas.
+// O painel e so de administracao: entra com usuario e senha e ve a operacao
+// inteira. Os tokens por pessoa ficam para a extensao (pop-up) e sao emitidos
+// em Configuracoes.
 export default function App() {
   const [view, setView] = useState("dashboard");
-  const [identity, setIdentity] = useState(null);
+  const [user, setUser] = useState(null);
   const [gateError, setGateError] = useState("");
   const [carregando, setCarregando] = useState(true);
 
-  const identificar = useCallback(async () => {
+  const carregarSessao = useCallback(async () => {
     try {
-      const me = await api.me();
-      setIdentity(me);
+      setUser(await api.session());
       setGateError("");
-      return me;
     } catch (error) {
-      setIdentity(null);
-      // 401 = falta token (ou o token nao vale mais). Qualquer outro erro e da
-      // API em si e nao se resolve pedindo token de novo.
+      setUser(null);
+      // 401 = sem sessao ou sessao vencida: so mostra o login. Qualquer outro
+      // erro e da API em si.
       setGateError(error.unauthorized ? "" : error.message);
-      if (!error.unauthorized) {
-        throw error;
-      }
-      return null;
     } finally {
       setCarregando(false);
     }
   }, []);
 
   useEffect(() => {
-    identificar().catch(() => undefined);
-  }, [identificar]);
+    carregarSessao();
+  }, [carregarSessao]);
 
-  async function entrar(token) {
-    setApiToken(token);
-    const me = await identificar().catch(() => null);
-    if (!me) {
-      // Token recusado nao fica guardado: recarregar a pagina nao pode
-      // ressuscitar um token que ja sabemos que nao vale.
-      setApiToken("");
-      setGateError("Token invalido ou revogado.");
+  // Qualquer chamada que receba 401 no meio do uso derruba para o login.
+  useEffect(() => {
+    function aoExpirar() {
+      setUser(null);
+      setGateError("Sua sessao expirou. Entre novamente.");
+    }
+
+    window.addEventListener(SESSION_EXPIRED_EVENT, aoExpirar);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, aoExpirar);
+  }, []);
+
+  async function entrar(username, password) {
+    try {
+      setUser(await api.login(username, password));
+      setGateError("");
+      setView("dashboard");
+    } catch (error) {
+      setGateError(error.message);
     }
   }
 
-  function sair() {
-    setApiToken("");
-    setIdentity(null);
+  async function sair() {
+    await api.logout().catch(() => undefined);
+    setUser(null);
+    setGateError("");
     setView("dashboard");
   }
-
-  const visiveis = useMemo(() => views.filter((item) => !item.adminOnly || identity?.isAdmin), [identity]);
 
   const currentView = useMemo(() => {
     if (view === "reports") return <Reports />;
     if (view === "inactivity") return <Inactivity />;
-    if (view === "ai" && identity?.isAdmin) return <AiPage />;
-    if (view === "settings") return <SettingsPage identity={identity} onTokenTrocado={identificar} />;
-    return <Dashboard isAdmin={Boolean(identity?.isAdmin)} />;
-  }, [view, identity, identificar]);
+    if (view === "ai") return <AiPage />;
+    if (view === "settings") return <SettingsPage />;
+    return <Dashboard />;
+  }, [view]);
 
   if (carregando) {
     return <div className="token-gate" />;
   }
 
-  if (!identity) {
-    return <TokenGate error={gateError} onSubmit={entrar} />;
+  if (!user) {
+    return <LoginGate error={gateError} onSubmit={entrar} />;
   }
 
   return (
@@ -97,7 +99,7 @@ export default function App() {
         </div>
 
         <nav aria-label="Principal">
-          {visiveis.map((item) => {
+          {views.map((item) => {
             const Icon = item.icon;
             return (
               <button
@@ -113,12 +115,10 @@ export default function App() {
           })}
         </nav>
 
-        {identity.authRequired ? (
-          <button className="nav-button" type="button" onClick={sair}>
-            <LogOut aria-hidden="true" size={18} />
-            Sair
-          </button>
-        ) : null}
+        <button className="nav-button" type="button" onClick={sair}>
+          <LogOut aria-hidden="true" size={18} />
+          Sair
+        </button>
       </aside>
 
       <main className="workspace">
@@ -127,18 +127,12 @@ export default function App() {
             <p>Operacao de atendimento</p>
             <h1>{views.find((item) => item.id === view)?.label}</h1>
           </div>
-          <span>{describeIdentity(identity)}</span>
+          <span>
+            {user.name} ({user.username})
+          </span>
         </header>
         {currentView}
       </main>
     </div>
   );
-}
-
-function describeIdentity(identity) {
-  if (!identity.authRequired) {
-    return "Ambiente local - sem token";
-  }
-
-  return identity.isAdmin ? `${identity.name} - ve tudo` : `${identity.name} - ${identity.attendant}`;
 }

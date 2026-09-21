@@ -1,7 +1,7 @@
 # Preparando a VPS (Ubuntu 26.04)
 
 Passo a passo do zero: maquina recem-criada ate o painel no ar em
-`https://gestao.mcallsolutions.com.br`, com a extensao disponivel para download.
+`https://tag-monitor.mcallsolutions.com.br`, com a extensao disponivel para download.
 
 Os arquivos citados aqui estao nesta mesma pasta: [`mcall.service`](mcall.service),
 [`nginx.conf`](nginx.conf), [`.env.production.example`](.env.production.example) e
@@ -165,7 +165,7 @@ sudo nano /opt/mcall/.env
 ```
 
 O arquivo fica do root, legivel pelo grupo do servico — o systemd le como root, e o `mcall` precisa dele para achar o
-banco quando voce emitir tokens pela linha de comando:
+banco quando voce criar usuarios ou emitir tokens pela linha de comando:
 
 ```bash
 sudo chown root:mcall /opt/mcall/.env && sudo chmod 640 /opt/mcall/.env
@@ -247,7 +247,7 @@ sudo nginx -t && sudo systemctl reload nginx
 Teste ainda em HTTP, direto pelo dominio:
 
 ```bash
-curl -s http://gestao.mcallsolutions.com.br/health
+curl -s http://tag-monitor.mcallsolutions.com.br/health
 ```
 
 ## 12. HTTPS
@@ -267,16 +267,20 @@ redirecionamento do 80, e instala a renovacao automatica. Confira a renovacao:
 sudo certbot renew --dry-run
 ```
 
-## 13. Token de ADMIN (faca antes de divulgar o endereco)
+## 13. Usuario do painel e tokens da extensao (faca antes de divulgar o endereco)
 
-Enquanto nao existe token, a API fica em **modo aberto**: qualquer um que abrir o dominio le todos os tickets.
+O painel entra com **usuario e senha**, e sem nenhum usuario ele nao abre. Crie o seu (a senha e pedida no
+terminal, sem eco):
 
 ```bash
-cd /opt/mcall && sudo -u mcall node server/src/scripts/tokens.js criar --nome "Supervisao" --admin
+cd /opt/mcall && sudo -u mcall node server/src/scripts/admins.js criar --login supervisao --nome "Supervisao"
 ```
 
-O token aparece **uma unica vez**. Copie e cole na tela de acesso do painel. Os tokens dos atendentes voce emite
-depois pelo proprio painel, em **Configuracoes > Acessos e tokens**, ou por aqui:
+Para trocar a senha depois: `... admins.js senha --login supervisao` (derruba as sessoes abertas).
+
+Os tokens sao so da extensao. Enquanto nao existe nenhum, as rotas de alertas ficam em **modo aberto**: qualquer um
+que alcance o dominio recebe todos os alertas. Emita os dos atendentes pelo painel, em **Configuracoes > Tokens da
+extensao**, ou por aqui:
 
 ```bash
 cd /opt/mcall && sudo -u mcall node server/src/scripts/tokens.js criar --nome "Stephanie" --atendente "Stephanie"
@@ -288,7 +292,7 @@ Confira que o recorte ficou como voce espera:
 cd /opt/mcall && sudo -u mcall node server/src/scripts/tokens.js listar
 ```
 
-> Localmente o atalho e `npm run token -- criar ...`. Aqui o comando chama o script direto porque o usuario `mcall`
+> Localmente os atalhos sao `npm run admin -- ...` e `npm run token -- ...`. Aqui o comando chama o script direto porque o usuario `mcall`
 > nao tem home: o npm tentaria escrever cache em um diretorio que nao existe. O `node` le o mesmo `.env` da pasta e
 > grava no banco de `/var/lib/mcall`.
 

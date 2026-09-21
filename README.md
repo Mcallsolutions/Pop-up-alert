@@ -5,8 +5,9 @@ Monitor de TAG e de inatividade dos tickets do MTalk. O servidor le os tickets *
 - um **painel web** com relatorios, inatividade e resumos de IA;
 - uma **extensao Chrome** que mostra o pop-up de alertas na tela de tickets do MTalk.
 
-Por enquanto o projeto roda **apenas localmente**. O acesso e por **token por pessoa**: cada atendente ve os
-proprios tickets (e todos os que estao sem atendente) — veja [Acesso por token](#acesso-por-token-quem-ve-o-que).
+O **painel** e de administracao e entra com **usuario e senha** — veja [Login do painel](#login-do-painel). A
+**extensao** identifica cada atendente por um **token por pessoa**: cada um recebe os proprios alertas (e todos os
+tickets sem atendente) — veja [Tokens da extensao](#tokens-da-extensao-quem-ve-o-que).
 
 ## Estrutura
 
@@ -45,7 +46,8 @@ npm run dev:admin   # so o painel
 npm run build       # build do painel em dist/
 npm start           # API sem --watch
 npm run migrate     # cria/atualiza o banco e sai
-npm run token       # emite, lista e revoga os tokens de acesso
+npm run admin       # cria usuarios do painel e troca senhas
+npm run token       # emite, lista e revoga os tokens da extensao
 ```
 
 ### Credenciais do MTalk
@@ -61,15 +63,41 @@ Sem token a API sobe normalmente, mas a coleta automatica fica desligada e o log
 
 Para conferir: **Configuracoes** no painel mostra se o token foi aceito, a ultima coleta e o botao **Coletar agora**.
 
-## Acesso por token (quem ve o que)
+## Login do painel
 
-Cada pessoa tem o **seu** token de acesso a esta API. Ele nao tem nada a ver com o `MTALK_TOKEN`: a coleta continua
-sendo uma so, com um token unico do MTalk, e o token da pessoa apenas **recorta o que ela le** do que ja foi coletado.
+O painel e so de administracao: quem entra ve a operacao inteira, a aba IA, o diagnostico da coleta e emite os
+tokens da extensao. O acesso e por **usuario e senha**; token nenhum abre o painel.
 
-| Perfil | Ve |
+Os usuarios sao criados pela linha de comando — nao ha cadastro pela web, entao um painel recem-publicado nao tem como
+ser "reivindicado" por quem chegar primeiro. **Sem nenhum usuario, o painel nao abre.**
+
+```bash
+npm run admin -- criar --login supervisao --nome "Supervisao"   # pede a senha no terminal
+npm run admin -- senha --login supervisao                        # troca a senha e derruba as sessoes abertas
+npm run admin -- desativar --login supervisao                    # bloqueia e derruba as sessoes
+npm run admin -- ativar --login supervisao
+npm run admin -- listar
+```
+
+A senha e pedida sem eco, para nao ficar no historico do shell (`--senha "<valor>"` existe para automacao) e precisa
+de pelo menos 8 caracteres. O banco guarda so o hash scrypt dela, com sal proprio.
+
+O login devolve uma **sessao** que vale `ADMIN_SESSION_HOURS` horas (padrao 12) e fica no `localStorage` daquele
+navegador; "Sair" encerra a sessao no servidor. Sessao vencida, senha trocada ou usuario desativado levam de volta para
+a tela de login na proxima chamada. Senhas erradas sao limitadas a 10 por IP a cada 15 minutos.
+
+## Tokens da extensao (quem ve o que)
+
+Cada atendente tem o **seu** token, usado **so pela extensao**. Ele nao tem nada a ver com o `MTALK_TOKEN`: a coleta
+continua sendo uma so, com um token unico do MTalk, e o token da pessoa apenas **recorta os alertas** que chegam no
+pop-up dela.
+
+| Perfil | Recebe |
 | --- | --- |
-| `ATENDENTE` | os tickets dele **mais todos os tickets sem atendente** |
-| `ADMIN` | tudo, incluindo a aba IA e o diagnostico da coleta |
+| `ATENDENTE` | os alertas dos tickets dele **mais todos os tickets sem atendente** |
+| `ADMIN` (supervisao) | os alertas de todos |
+
+Um token, mesmo de perfil `ADMIN`, **nao abre o painel**.
 
 Ticket **sem atendente aparece para todo mundo** de proposito: ninguem e dono dele, e cliente esquecido na fila e
 justamente o que nao pode passar despercebido.
@@ -87,22 +115,21 @@ npm run token -- revogar --id 3
 ```
 
 O token aparece **uma unica vez**, na criacao — o banco guarda so o SHA-256 dele. Perdeu, revoga e emite outro.
-Revogar vale na hora. Quem ja tem token de ADMIN tambem emite e revoga pelo painel, em **Configuracoes**.
+Revogar vale na hora. Tambem da para emitir e revogar pelo painel, em **Configuracoes > Tokens da extensao**.
 
 O `--atendente` e o nome como aparece no MTalk; as variacoes conhecidas sao unificadas sozinhas (`Alek NETFIBRA` vira
 `Aleksandro`), a mesma tabela que os relatorios usam.
 
 ### Modo aberto
 
-**Enquanto nao existe nenhum token ativo, a API fica aberta** e todo mundo enxerga tudo, como era antes — assim um
-clone novo sobe com `npm run dev` sem passo extra. **Criar o primeiro token liga a exigencia para todo mundo**,
-inclusive para o painel e a extensao que estiverem abertos: emita o seu token de ADMIN junto com os dos atendentes.
+**Enquanto nao existe nenhum token ativo, as rotas da extensao (`/api/mtalk`) ficam abertas** e todo mundo recebe
+todos os alertas — assim um clone novo sobe com `npm run dev` sem passo extra. **Criar o primeiro token liga a
+exigencia** para todas as extensoes. O modo aberto nunca vale para o painel, que sempre pede login.
 
-### Onde cada um cola o token
+### Onde o atendente cola o token
 
-- **Painel**: a tela de acesso pede o token e ele fica no `localStorage` daquele navegador. "Sair" limpa.
-- **Extensao**: campo **Seu token de acesso**, no popup ou nas opcoes. O popup mostra em **Alertas de** de quem e o
-  recorte que esta chegando — a forma mais rapida de conferir que o token certo foi colado.
+Campo **Seu token de acesso**, no popup ou nas opcoes da extensao. O popup mostra em **Alertas de** de quem e o
+recorte que esta chegando — a forma mais rapida de conferir que o token certo foi colado.
 
 ## Extensao Chrome
 
@@ -118,7 +145,7 @@ A extensao **nao le a pagina nem a sessao do MTalk** e nao chama a API dele: so 
 
 Quem nao tem o repositorio na maquina baixa a extensao pelo proprio painel: **Configuracoes > Extensao do Chrome >
 Baixar extensao (.zip)**. O botao chama `GET /api/extension/download`, que compacta a pasta `extension` do servidor na
-hora (qualquer token serve — quem instala e a propria pessoa do atendimento). O zip traz uma pasta so, para
+hora (so com login no painel). O zip traz uma pasta so, para
 descompactar e apontar o "Carregar sem compactacao" nela, e **nao leva token nem `.env` dentro**: cada pessoa cola o
 seu token depois de instalar.
 
@@ -158,8 +185,9 @@ inteiro e ja esta liberado na configuracao.
    `sudo certbot --nginx -d xn--gesto-dra.mcallsolutions.com.br`.
 8. **Firewall**: `sudo ufw allow 22,80,443/tcp && sudo ufw enable`. A porta 3333 nunca e liberada — com
    `HOST=127.0.0.1` ela so existe para o nginx.
-9. **Emita o token de ADMIN antes de abrir o dominio**: enquanto nao houver token a API fica em
-   [modo aberto](#modo-aberto), e na internet isso significa que qualquer um le tudo.
+9. **Antes de abrir o dominio**: crie o seu usuario do painel (`npm run admin -- criar ...`) e emita os tokens da
+   extensao — enquanto nao houver token, as rotas da extensao ficam em [modo aberto](#modo-aberto), e na internet isso
+   significa que qualquer um recebe todos os alertas.
 
 Depois disso, atualizar e `./deploy/atualizar.sh` (git pull, build e restart).
 
@@ -187,14 +215,22 @@ sqlite3 /var/lib/mcall/monitor.sqlite ".backup /var/backups/mcall-$(date +%F).sq
 
 ## API
 
-Fora `GET /health`, todo endpoint exige o cabecalho `Authorization: Bearer <token>` — a menos que a API esteja em
-[modo aberto](#modo-aberto). Sem token valido a resposta e `401`; area de ADMIN acessada com token de atendente da
-`403`. `/api/reports` e `/api/mtalk/alerts` ja respondem **recortados** pelo token.
+Fora `GET /health` e `POST /api/auth/login`, todo endpoint exige o cabecalho `Authorization: Bearer <valor>`, com
+uma de duas credenciais:
+
+- **sessao do painel** (`mcs_...`, devolvida pelo login): abre tudo;
+- **token da extensao** (`mca_...`): abre so `/api/mtalk/*` e `/api/auth/me`, e `/api/mtalk/alerts` responde
+  **recortado** pelo token. Sem nenhum token ativo essas rotas ficam em [modo aberto](#modo-aberto).
+
+Sem credencial valida a resposta e `401` — inclusive token da extensao em rota do painel.
 
 Acesso:
 
-- `GET /api/auth/me` — quem e o token, qual o recorte e se a API exige token
-- `GET /api/auth/tokens` / `POST /api/auth/tokens` / `DELETE /api/auth/tokens/:id` (ADMIN)
+- `POST /api/auth/login` — `{ username, password }` → `{ session, expiresAt, user }`
+- `POST /api/auth/logout` — encerra a sessao enviada no cabecalho
+- `GET /api/auth/session` — quem esta logado no painel
+- `GET /api/auth/me` — para a extensao: de quem e o token, qual o recorte e se a API exige token
+- `GET /api/auth/tokens` / `POST /api/auth/tokens` / `DELETE /api/auth/tokens/:id` (painel)
 
 Coleta e alertas:
 
@@ -278,19 +314,19 @@ SQLite em `server/data/monitor.sqlite` (ou `SQLITE_PATH`). As migrations ficam e
 
 ## Seguranca e LGPD
 
-O token por pessoa separa **o que cada um enxerga**; ele nao transforma o projeto em algo exposto com seguranca.
-O token fica em texto no navegador (`localStorage` do painel, `chrome.storage.local` da extensao): contra quem ja tem
-acesso a maquina ou a rede, isso nao protege. **Nao exponha a porta 3333 nem a 5173 fora da maquina** — e, se nenhum
-token foi criado ainda, a API esta aberta e qualquer um que a alcance le tudo.
+O painel exige login; o token da extensao separa **o que cada atendente recebe**. A sessao do painel e o token da
+extensao ficam em texto no navegador (`localStorage` do painel, `chrome.storage.local` da extensao): contra quem ja
+tem acesso a maquina, isso nao protege. **Nao exponha a porta 3333 nem a 5173 fora da maquina** — e, se nenhum token
+da extensao foi criado ainda, as rotas de alertas estao abertas para qualquer um que alcance a API.
 
-Na VPS, o que fica exposto e o nginx com TLS ([Hospedando numa VPS](#hospedando-numa-vps-ubuntu)): sem HTTPS o token
-viaja em texto no cabecalho `Authorization` e qualquer intermediario passa a ver os tickets daquela pessoa. Se todos os
-atendentes ja estao numa mesma rede ou VPN, restringir o nginx por IP tira o painel da internet e devolve ao token o
-papel que ele tem: recorte de visao, nao barreira de acesso.
+Na VPS, o que fica exposto e o nginx com TLS ([Hospedando numa VPS](#hospedando-numa-vps-ubuntu)): sem HTTPS a senha
+do login, a sessao e os tokens viajam em texto e qualquer intermediario passa a ver os tickets. Se todos os
+atendentes ja estao numa mesma rede ou VPN, restringir o nginx por IP tira o painel da internet.
 
 O projeto coleta apenas o necessario para o relatorio: cliente, fila, atendente, conexao, horario, TAGs, status e identificadores do ticket. Ele **nao le o conteudo das mensagens** — nunca chama `GET /backend/messages/{ticketId}` — e nao faz nenhuma escrita no atendimento.
 
 Os tokens do MTalk e da OpenAI ficam apenas no `.env` local; a API nunca os grava no banco nem os devolve. Os tokens
-de acesso ao painel ficam no banco **so como SHA-256** — nem a listagem de tokens consegue reconstituir um deles.
+da extensao e as sessoes do painel ficam no banco **so como SHA-256**, e as senhas do painel como hash scrypt — nada
+disso pode ser reconstituido a partir do banco.
 
 Atencao ao usar a aba **IA**: gerar um resumo envia para a OpenAI o recorte filtrado, incluindo nomes de clientes, atendentes e empresas.

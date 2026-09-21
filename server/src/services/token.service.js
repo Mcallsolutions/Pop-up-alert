@@ -1,4 +1,6 @@
-// Tokens de acesso a ESTA API.
+// Tokens da extensao (pop-up): identificam o atendente para recortar os
+// alertas. O painel de administracao NAO usa estes tokens — ele entra com
+// usuario e senha (admin-auth.service).
 //
 // Nao confundir com o MTALK_TOKEN: aquele e unico, fica no .env e e o que a
 // coleta usa para ler os tickets no MTalk. O token daqui e emitido por voce,
@@ -8,9 +10,9 @@
 // O banco guarda apenas o SHA-256 do token. O valor cru existe uma unica vez,
 // na resposta da criacao: perdeu, revoga e emite outro.
 //
-// Enquanto nao houver nenhum token ativo a API roda em MODO ABERTO (todo mundo
-// como ADMIN, como era antes), para que um clone novo suba com `npm run dev`
-// sem passo extra. Criar o primeiro token liga a exigencia de token.
+// Enquanto nao houver nenhum token ativo, as rotas da extensao rodam em MODO
+// ABERTO (todo mundo ve tudo), para que um clone novo suba com `npm run dev`
+// sem passo extra. O painel nunca fica aberto. Criar o primeiro token liga a exigencia de token.
 
 const crypto = require("node:crypto");
 const { getDatabase } = require("../database");

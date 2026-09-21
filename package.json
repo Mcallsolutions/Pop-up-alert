@@ -13,7 +13,8 @@
     "build": "vite build",
     "start": "node server/src/server.js",
     "migrate": "node server/src/database/index.js",
-    "token": "node server/src/scripts/tokens.js"
+    "token": "node server/src/scripts/tokens.js",
+    "admin": "node server/src/scripts/admins.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
