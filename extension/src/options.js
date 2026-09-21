@@ -12,7 +12,7 @@ async function loadConfig() {
     feedback.textContent = response?.error || "Nao foi possivel carregar as opcoes";
     return;
   }
-  apiBaseUrl.value = response.config.apiBaseUrl || "https://xn--gesto-dra.mcallsolutions.com.br";
+  apiBaseUrl.value = response.config.apiBaseUrl || "https://tag-monitor.mcallsolutions.com.br";
   // Preenchido para que salvar a URL nao apague o token.
   apiToken.value = response.config.apiToken || "";
 }

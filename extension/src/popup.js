@@ -32,7 +32,7 @@ async function load() {
   const response = await sendMessage({ type: "GET_STATUS" });
   if (response?.ok) {
     renderStatus(response.status);
-    elements.apiBaseUrl.value = response.config?.apiBaseUrl || "https://xn--gesto-dra.mcallsolutions.com.br";
+    elements.apiBaseUrl.value = response.config?.apiBaseUrl || "https://tag-monitor.mcallsolutions.com.br";
     // O campo ja vem preenchido para que salvar a URL nao apague o token.
     elements.apiToken.value = response.config?.apiToken || "";
   } else {

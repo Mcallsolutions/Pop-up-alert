@@ -14,14 +14,21 @@ const STATUS_KEY = "mcall_status";
 const MTALK_TICKETS_URL = "https://s11.mtalk.com.br/tickets*";
 
 const DEFAULT_CONFIG = {
-  // API hospedada. Em maquina de desenvolvimento troque por http://localhost:3333
-  // no popup ou nas opcoes da extensao.
-  apiBaseUrl: "https://xn--gesto-dra.mcallsolutions.com.br",
+  // API hospedada na VPS. Em maquina de desenvolvimento troque por
+  // http://localhost:3333 no popup ou nas opcoes da extensao.
+  apiBaseUrl: "https://tag-monitor.mcallsolutions.com.br",
   // Token da API LOCAL, emitido no painel ou por `npm run token`. E ele que diz
   // de quem sao os alertas: cada atendente cola o seu. Nada a ver com o login
   // do MTalk — a extensao continua sem tocar na sessao do MTalk.
   apiToken: ""
 };
+
+// Enderecos padrao antigos: quem instalou antes da VPS ficou com eles salvos no
+// storage. Ao atualizar a extensao, eles sao trocados pelo padrao atual.
+const LEGACY_API_BASE_URLS = new Set([
+  "https://xn--gesto-dra.mcallsolutions.com.br",
+  "https://gestao.mcallsolutions.com.br"
+]);
 
 const DEFAULT_STATUS = {
   apiStatus: "desconhecido",
@@ -40,8 +47,12 @@ const DEFAULT_STATUS = {
 
 chrome.runtime.onInstalled.addListener(async () => {
   const current = await chrome.storage.local.get(CONFIG_KEY);
+  const config = normalizeConfig(current[CONFIG_KEY] || {});
+  if (LEGACY_API_BASE_URLS.has(config.apiBaseUrl)) {
+    config.apiBaseUrl = DEFAULT_CONFIG.apiBaseUrl;
+  }
   await chrome.storage.local.set({
-    [CONFIG_KEY]: normalizeConfig(current[CONFIG_KEY] || {}),
+    [CONFIG_KEY]: config,
     [STATUS_KEY]: DEFAULT_STATUS
   });
 });
@@ -244,7 +255,7 @@ function describeFetchFailure(error, endpoint) {
   const mensagem = error?.message || "Falha ao falar com a API";
 
   if (/failed to fetch|networkerror|load failed/i.test(mensagem)) {
-    return `Nao foi possivel alcancar ${endpoint}. Confirme se a API local esta rodando (npm run dev).`;
+    return `Nao foi possivel alcancar ${endpoint}. Confirme a URL da API nas opcoes da extensao e se o servidor esta no ar.`;
   }
 
   return mensagem;
