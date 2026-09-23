@@ -306,6 +306,13 @@ cd /opt/tag-monitor && sudo -u tag-monitor node server/src/scripts/admins.js cri
 
 Para trocar a senha depois: `... admins.js senha --login supervisao` (derruba as sessoes abertas).
 
+> Se esse comando falhar com `EACCES: permission denied, mkdir '/opt/tag-monitor/server/data'`, o `.env` nao esta
+> legivel para o usuario `tag-monitor`: sem ele o `SQLITE_PATH` fica vazio e o script tenta criar o banco dentro da
+> pasta do deploy. O servico nao reclama porque o systemd le o arquivo como root. Refaca a permissao do passo 8
+> (`sudo chown root:tag-monitor /opt/tag-monitor/.env && sudo chmod 640 /opt/tag-monitor/.env`) e repita. Para nao
+> depender do `.env`, da tambem para passar o caminho na linha de comando:
+> `sudo -u tag-monitor env SQLITE_PATH=/var/lib/tag-monitor/monitor.sqlite node server/src/scripts/admins.js ...`.
+
 Os tokens sao so da extensao. Enquanto nao existe nenhum, as rotas de alertas ficam em **modo aberto**: qualquer um
 que alcance o dominio recebe todos os alertas. Emita os dos atendentes pelo painel, em **Configuracoes > Tokens da
 extensao**, ou por aqui:
@@ -484,3 +491,4 @@ subir a API.
 | `npm run build` morre com `Killed` | falta memoria — crie swap (passo 9) |
 | `Cannot find module 'node:sqlite'` | Node menor que 22.5 (passo 5) |
 | Banco aparece em `/opt/tag-monitor/server/data` | o processo nao leu o `.env` — confira dono e permissao do arquivo |
+| `EACCES ... mkdir '/opt/tag-monitor/server/data'` nos scripts `admins.js`/`tokens.js` | o `.env` nao e legivel pelo usuario do servico (passo 13) |

@@ -11,7 +11,9 @@
 //
 // O token aparece UMA vez, na criacao. Perdeu, revoga e emite outro.
 
-require("dotenv").config();
+const { explainError, loadEnv } = require("./cli-env");
+
+loadEnv();
 
 const { initializeDatabase } = require("../database");
 const { createToken, listTokens, revokeToken } = require("../services/token.service");
@@ -27,7 +29,7 @@ Comandos:
 `.trim();
 
 main().catch((error) => {
-  console.error(`\n[token] ${error.message}\n`);
+  console.error(`\n[token] ${explainError(error)}\n`);
   process.exitCode = 1;
 });
 

@@ -12,7 +12,9 @@
 // A senha e pedida no terminal, sem eco — assim ela nao fica no historico do
 // shell. Para automacao, --senha "<valor>" tambem funciona.
 
-require("dotenv").config();
+const { explainError, loadEnv } = require("./cli-env");
+
+loadEnv();
 
 const readline = require("node:readline");
 const { initializeDatabase } = require("../database");
@@ -36,7 +38,7 @@ Comandos:
 `.trim();
 
 main().catch((error) => {
-  console.error(`\n[admin] ${error.message}\n`);
+  console.error(`\n[admin] ${explainError(error)}\n`);
   process.exitCode = 1;
 });
 
