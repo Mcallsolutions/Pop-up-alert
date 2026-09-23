@@ -163,26 +163,33 @@ Como funciona:
 ## Hospedando numa VPS (Ubuntu)
 
 O passo a passo completo, da maquina recem-criada ate o painel no ar, esta em **[deploy/VPS.md](deploy/VPS.md)**.
-Os arquivos de exemplo ficam na mesma pasta: `mcall.service` (systemd), `nginx.conf`, `.env.production.example` e
-`atualizar.sh`. O desenho e **systemd rodando o Node + nginx na frente**: uma app Node so, com o banco em arquivo,
-nao ganha nada com Docker — o container so acrescentaria a dor de cuidar do volume do SQLite.
+Os arquivos de exemplo ficam na mesma pasta: `tag-monitor.service` (systemd), `nginx.conf`,
+`.env.production.example` e `atualizar.sh`. O desenho e **systemd rodando o Node + nginx na frente**: uma app Node
+so, com o banco em arquivo, nao ganha nada com Docker — o container so acrescentaria a dor de cuidar do volume do
+SQLite.
 
-O dominio da operacao tem um caractere acentuado. Manifest de extensao, nginx e certbot so aceitam a forma em
-**ASCII (punycode)**: `xn--gesto-dra.mcallsolutions.com.br`. E tambem a forma que o navegador manda no cabecalho
-`Origin`, entao e ela que vai no `CORS_ORIGINS`. Um alias sem acento (`gestao.mcallsolutions.com.br`) evita o assunto
-inteiro e ja esta liberado na configuracao.
+Os caminhos da VPS levam o nome do projeto: codigo em `/opt/tag-monitor`, banco em `/var/lib/tag-monitor`, servico e
+usuario `tag-monitor`. Quem subiu antes, quando esses caminhos eram `mcall`, tem a troca passo a passo em
+[Migrando uma VPS que ainda usa os caminhos `mcall`](deploy/VPS.md#migrando-uma-vps-que-ainda-usa-os-caminhos-mcall).
 
-1. **DNS**: registro `A` do dominio (e do alias sem acento, se usar) apontando para o IP da VPS.
+O dominio da operacao e `tag-monitor.mcallsolutions.com.br`. Ele aparece em tres lugares que precisam combinar: o
+`server_name` do nginx, o `CORS_ORIGINS` do `.env` e o `host_permissions` do `manifest.json` da extensao. Os
+enderecos antigos (`gestao...` e o acentuado `xn--gesto-dra...`) sao tratados como legado: a extensao troca sozinha
+quem ainda tiver um deles salvo.
+
+1. **DNS**: registro `A` de `tag-monitor.mcallsolutions.com.br` apontando para o IP da VPS.
 2. **Node 24**: `curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -` e `sudo apt install -y nodejs`.
    O banco usa `node:sqlite`, que so existe a partir do Node 22.5 e so e estavel no 24.
-3. **Codigo**: clone em `/opt/mcall`, com um usuario de servico proprio (`sudo useradd --system --create-home mcall`).
-   O banco fica fora da pasta do deploy: `sudo install -d -o mcall -g mcall /var/lib/mcall`.
-4. **.env**: copie `deploy/.env.production.example` para `/opt/mcall/.env`, preencha `MTALK_TOKEN` e
+3. **Codigo**: clone em `/opt/tag-monitor`, com um usuario de servico proprio
+   (`sudo useradd --system --create-home tag-monitor`). O banco fica fora da pasta do deploy:
+   `sudo install -d -o tag-monitor -g tag-monitor /var/lib/tag-monitor`.
+4. **.env**: copie `deploy/.env.production.example` para `/opt/tag-monitor/.env`, preencha `MTALK_TOKEN` e
    `OPENAI_API_KEY` e feche o arquivo (`chmod 600`).
 5. **Build**: `npm ci` (completo — o build do painel usa as devDependencies) e `npm run build`.
-6. **systemd**: copie `deploy/mcall.service` para `/etc/systemd/system/`, `daemon-reload` e `enable --now mcall`.
-7. **nginx + TLS**: copie `deploy/nginx.conf` para `/etc/nginx/sites-available/mcall`, ative o link e rode
-   `sudo certbot --nginx -d xn--gesto-dra.mcallsolutions.com.br`.
+6. **systemd**: copie `deploy/tag-monitor.service` para `/etc/systemd/system/`, `daemon-reload` e
+   `enable --now tag-monitor`.
+7. **nginx + TLS**: copie `deploy/nginx.conf` para `/etc/nginx/sites-available/tag-monitor`, ative o link e rode
+   `sudo certbot --nginx -d tag-monitor.mcallsolutions.com.br`.
 8. **Firewall**: `sudo ufw allow 22,80,443/tcp && sudo ufw enable`. A porta 3333 nunca e liberada — com
    `HOST=127.0.0.1` ela so existe para o nginx.
 9. **Antes de abrir o dominio**: crie o seu usuario do painel (`npm run admin -- criar ...`) e emita os tokens da
@@ -198,8 +205,8 @@ Depois disso, atualizar e `./deploy/atualizar.sh` (git pull, build e restart).
 | `HOST` | `0.0.0.0` (a extensao de cada maquina alcanca a API) | `127.0.0.1` (so o nginx) |
 | `TRUST_PROXY` | `0` | `1` — sem isso o rate limit conta todo mundo como o nginx |
 | `SERVE_ADMIN` | `1` (a API serve `/dist` se ele existir) | `0` — quem serve os estaticos e o nginx |
-| `SQLITE_PATH` | `server/data/monitor.sqlite` | `/var/lib/mcall/monitor.sqlite` |
-| `CORS_ORIGINS` | padrao (localhost + extensao) | o dominio em punycode + `chrome-extension://` |
+| `SQLITE_PATH` | `server/data/monitor.sqlite` | `/var/lib/tag-monitor/monitor.sqlite` |
+| `CORS_ORIGINS` | padrao (localhost + extensao) | `https://tag-monitor.mcallsolutions.com.br,chrome-extension://` |
 
 Na extensao, o `manifest.json` precisa do dominio em `host_permissions` — sem isso o service worker nao consegue
 chamar a API — e o `apiBaseUrl` padrao ja aponta para ele. Quem usar a API local troca a URL no popup.
@@ -210,7 +217,7 @@ O banco e o historico inteiro de coletas. Nunca copie o arquivo com a API rodand
 `.backup` do proprio SQLite num cron diario:
 
 ```bash
-sqlite3 /var/lib/mcall/monitor.sqlite ".backup /var/backups/mcall-$(date +%F).sqlite"
+sqlite3 /var/lib/tag-monitor/monitor.sqlite ".backup /var/backups/tag-monitor-$(date +%F).sqlite"
 ```
 
 ## API

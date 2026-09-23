@@ -1,8 +1,8 @@
-# systemd unit da API. Copie para /etc/systemd/system/mcall.service e ajuste os
-# caminhos se o deploy nao estiver em /opt/mcall.
+# systemd unit da API. Copie para /etc/systemd/system/tag-monitor.service e ajuste os
+# caminhos se o deploy nao estiver em /opt/tag-monitor.
 #
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now mcall
+#   sudo systemctl enable --now tag-monitor
 
 [Unit]
 Description=Mcall Ticket Tag API
@@ -11,10 +11,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=mcall
-Group=mcall
-WorkingDirectory=/opt/mcall
-EnvironmentFile=/opt/mcall/.env
+User=tag-monitor
+Group=tag-monitor
+WorkingDirectory=/opt/tag-monitor
+EnvironmentFile=/opt/tag-monitor/.env
 ExecStart=/usr/bin/node server/src/server.js
 Restart=always
 RestartSec=5
@@ -26,7 +26,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/mcall
+ReadWritePaths=/var/lib/tag-monitor
 
 [Install]
 WantedBy=multi-user.target
