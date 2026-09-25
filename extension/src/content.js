@@ -2,15 +2,23 @@
 //
 // A extensao nao le a pagina nem a sessao do MTalk: os tickets sao coletados
 // pelo servidor local direto na API oficial do MTalk. Este script so pede os
-// alertas ja calculados (via service worker) e desenha o pop-up.
+// alertas ja calculados (via service worker), desenha o pop-up e toca o bip de
+// inatividade.
 (() => {
   // Mesmo ritmo da coleta padrao do servidor (MTALK_COLLECT_INTERVAL_SECONDS).
   const REFRESH_INTERVAL_MS = 60 * 1000;
   const ALERT_SNOOZE_MS = 5 * 60 * 1000;
   const ALERT_ROOT_ID = "mcall-ticket-tag-alert-root";
+  // Bip de inatividade: tom curto e baixo, gerado na hora (sem arquivo de som).
+  const BEEP_FREQUENCY_HZ = 880;
+  const BEEP_SECONDS = 0.18;
+  const BEEP_VOLUME = 0.12;
 
   let refreshTimer = null;
   let alertSnoozedUntil = 0;
+  let audioContext = null;
+  let soundUnlocked = false;
+  let beepQueue = Promise.resolve();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "REFRESH_ALERTS") {
@@ -23,12 +31,13 @@
   });
 
   injectAlertStyles();
+  setupSound();
   refreshAlerts().catch(reportError);
   refreshTimer = window.setInterval(() => refreshAlerts().catch(reportError), REFRESH_INTERVAL_MS);
   window.addEventListener("beforeunload", () => window.clearInterval(refreshTimer));
 
   async function refreshAlerts({ force = false } = {}) {
-    const response = await sendRuntimeMessage({ type: "FETCH_ALERTS" });
+    const response = await sendRuntimeMessage({ type: "FETCH_ALERTS", canBeep: canBeep({ force }) });
 
     // API fora do ar ou leitura velha: melhor nenhum pop-up do que um alerta
     // que nao reflete mais a fila.
@@ -38,6 +47,9 @@
     }
 
     renderAlerts(response.alerts, { force });
+    if (response.beep) {
+      playBeep();
+    }
     return { ok: true };
   }
 
@@ -122,6 +134,77 @@
 
   function removeAlert() {
     document.getElementById(ALERT_ROOT_ID)?.remove();
+  }
+
+  // O Chrome so libera som numa pagina depois de o usuario interagir com ela
+  // (clique ou tecla) — ou quando ele chegou por um clique vindo de outra
+  // pagina do MTalk. O contexto de audio nasce com o script; se nascer
+  // bloqueado, cada clique ou tecla tenta liberar de novo. Liberado, ele fica
+  // suspenso fora do bip, para nao segurar a saida de som do computador.
+  function setupSound() {
+    if (typeof AudioContext !== "function") {
+      return;
+    }
+
+    // Sem audio a pagina segue com o pop-up, so sem bip.
+    try {
+      audioContext = new AudioContext();
+    } catch (error) {
+      reportError(error);
+      return;
+    }
+    audioContext.addEventListener("statechange", handleSoundStateChange);
+    handleSoundStateChange();
+    if (!soundUnlocked) {
+      window.addEventListener("pointerdown", unlockSound, true);
+      window.addEventListener("keydown", unlockSound, true);
+    }
+  }
+
+  function unlockSound() {
+    audioContext.resume().catch(() => undefined);
+  }
+
+  function handleSoundStateChange() {
+    if (soundUnlocked || audioContext.state !== "running") {
+      return;
+    }
+
+    soundUnlocked = true;
+    window.removeEventListener("pointerdown", unlockSound, true);
+    window.removeEventListener("keydown", unlockSound, true);
+    audioContext.suspend().catch(() => undefined);
+  }
+
+  // A aba so disputa o bip quando consegue toca-lo agora: com o som liberado e
+  // fora do silencio de 5 minutos do "x". Senao o bip fica para a proxima
+  // consulta — desta aba ou de outra aba do MTalk.
+  function canBeep({ force }) {
+    return soundUnlocked && (force || alertSnoozedUntil <= Date.now());
+  }
+
+  // Em fila: um bip so comeca depois de o anterior suspender o audio.
+  function playBeep() {
+    beepQueue = beepQueue.then(beepOnce).catch(reportError);
+  }
+
+  async function beepOnce() {
+    await audioContext.resume();
+
+    const start = audioContext.currentTime;
+    const oscillator = new OscillatorNode(audioContext, { type: "sine", frequency: BEEP_FREQUENCY_HZ });
+    const volume = new GainNode(audioContext, { gain: 0 });
+    // Sobe e desce em rampa: som que comeca ou para seco estala na caixa de som.
+    volume.gain.setValueAtTime(0, start);
+    volume.gain.linearRampToValueAtTime(BEEP_VOLUME, start + 0.01);
+    volume.gain.exponentialRampToValueAtTime(0.0001, start + BEEP_SECONDS);
+    oscillator.connect(volume).connect(audioContext.destination);
+
+    const ended = new Promise((resolve) => oscillator.addEventListener("ended", resolve, { once: true }));
+    oscillator.start(start);
+    oscillator.stop(start + BEEP_SECONDS);
+    await ended;
+    await audioContext.suspend();
   }
 
   function buildAlertSection(type, title, group, getMeta) {

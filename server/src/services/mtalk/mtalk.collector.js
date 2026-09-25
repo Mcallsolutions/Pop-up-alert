@@ -195,7 +195,14 @@ function getCurrentAlerts({ attendant = null } = {}) {
     scope: { attendant: attendant || null },
     lastError: lastRun.ok === false ? lastRun.error : null,
     missingTag: { total: missingTag.length, items: missingTag.slice(0, MAX_ALERT_ITEMS).map(toAlertItem) },
-    inactive: { total: inactive.length, items: inactive.slice(0, MAX_ALERT_ITEMS).map(toAlertItem) }
+    inactive: {
+      total: inactive.length,
+      items: inactive.slice(0, MAX_ALERT_ITEMS).map(toAlertItem),
+      // Todos os inativos COM atendente, sem o corte de MAX_ALERT_ITEMS: quem
+      // acabou de passar do limite e o menos parado da lista e cairia fora dos
+      // itens. A extensao compara com a consulta anterior para tocar o bip.
+      assignedTicketIds: inactive.filter(hasResponsible).map((ticket) => ticket.externalTicketId)
+    }
   };
 }
 

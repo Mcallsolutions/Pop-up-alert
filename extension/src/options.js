@@ -1,6 +1,7 @@
 const form = document.getElementById("optionsForm");
 const apiBaseUrl = document.getElementById("apiBaseUrl");
 const apiToken = document.getElementById("apiToken");
+const inactivitySound = document.getElementById("inactivitySound");
 const feedback = document.getElementById("feedback");
 
 document.addEventListener("DOMContentLoaded", loadConfig);
@@ -15,13 +16,14 @@ async function loadConfig() {
   apiBaseUrl.value = response.config.apiBaseUrl || "https://tag-monitor.mcallsolutions.com.br";
   // Preenchido para que salvar a URL nao apague o token.
   apiToken.value = response.config.apiToken || "";
+  inactivitySound.checked = response.config.inactivitySound !== false;
 }
 
 async function saveConfig(event) {
   event.preventDefault();
   const response = await sendMessage({
     type: "SAVE_CONFIG",
-    config: { apiBaseUrl: apiBaseUrl.value, apiToken: apiToken.value }
+    config: { apiBaseUrl: apiBaseUrl.value, apiToken: apiToken.value, inactivitySound: inactivitySound.checked }
   });
   feedback.textContent = response?.ok ? "Configuracao salva." : response?.error || "Erro ao salvar configuracao";
 }

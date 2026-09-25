@@ -229,6 +229,25 @@ input:focus {
   outline: 3px solid var(--green-glow);
 }
 
+/* Caixa de marcar ao lado do texto; a dica (small) vai para baixo do texto. */
+.check {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: 8px;
+}
+
+.check input {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--green);
+}
+
+.check small {
+  grid-column: 2;
+}
+
 .feedback {
   min-height: 18px;
   color: var(--text-2);

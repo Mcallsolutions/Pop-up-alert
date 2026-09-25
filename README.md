@@ -157,6 +157,11 @@ Como funciona:
 - a cada 1 minuto o content script pede `GET /api/mtalk/alerts` com o token da pessoa (a chamada sai do service worker, porque a pagina https do MTalk nao pode chamar `http://localhost`), e recebe so os alertas do recorte dela;
 - **Registre a TAG do cliente** lista tickets sem TAG com atendente vinculado; **Alerta de inatividade** lista tickets parados ha mais de 15 minutos, com ou sem atendente;
 - clicar no item abre o ticket (`/tickets/<uuid>`); fechar o pop-up silencia por 5 minutos;
+- quando um cliente **com atendente vinculado** passa do limite de inatividade, toca um **bip** curto e baixo, uma vez
+  por cliente (se ele for respondido e parar de novo, toca de novo). Ticket aguardando sem atendente nao toca. Com
+  varias abas do MTalk abertas o bip toca numa so; durante o silencio de 5 minutos ele espera e toca quando o pop-up
+  volta. Quem ja estava parado quando o MTalk foi aberto aparece no pop-up, sem bip. O Chrome so libera som depois do
+  primeiro clique ou tecla na pagina. Da para desligar no popup ou nas opcoes da extensao;
 - sem coleta recente no servidor (API fora do ar, token do MTalk recusado) o pop-up some, em vez de mostrar alerta velho;
 - no popup, **Coletar agora** pede uma coleta imediata e **Testar API** confere a API local e o token do MTalk.
 
@@ -241,7 +246,8 @@ Acesso:
 
 Coleta e alertas:
 
-- `GET /api/mtalk/alerts` — alertas da ultima coleta, no formato do pop-up
+- `GET /api/mtalk/alerts` — alertas da ultima coleta, no formato do pop-up. `inactive.items` traz no maximo 6
+  tickets; `inactive.assignedTicketIds` traz os ids de **todos** os inativos com atendente, que a extensao usa para o bip
 - `GET /api/mtalk/status` — estado do token do MTalk, agendamento e ultima coleta (sem expor o token)
 - `POST /api/mtalk/collect` — coleta agora; `?dryRun=1` le a API e nao grava
 

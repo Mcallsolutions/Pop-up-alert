@@ -15,6 +15,7 @@ const elements = {
   configForm: document.getElementById("configForm"),
   apiBaseUrl: document.getElementById("apiBaseUrl"),
   apiToken: document.getElementById("apiToken"),
+  inactivitySound: document.getElementById("inactivitySound"),
   feedback: document.getElementById("feedback")
 };
 
@@ -35,6 +36,7 @@ async function load() {
     elements.apiBaseUrl.value = response.config?.apiBaseUrl || "https://tag-monitor.mcallsolutions.com.br";
     // O campo ja vem preenchido para que salvar a URL nao apague o token.
     elements.apiToken.value = response.config?.apiToken || "";
+    elements.inactivitySound.checked = response.config?.inactivitySound !== false;
   } else {
     setFeedback(response?.error || "Nao foi possivel carregar o status");
   }
@@ -81,12 +83,17 @@ async function saveConfig(event) {
   event.preventDefault();
   const response = await sendMessage({
     type: "SAVE_CONFIG",
-    config: { apiBaseUrl: elements.apiBaseUrl.value, apiToken: elements.apiToken.value }
+    config: {
+      apiBaseUrl: elements.apiBaseUrl.value,
+      apiToken: elements.apiToken.value,
+      inactivitySound: elements.inactivitySound.checked
+    }
   });
   if (response?.ok) {
     setFeedback("Configuracao salva.");
     elements.apiBaseUrl.value = response.config.apiBaseUrl;
     elements.apiToken.value = response.config.apiToken;
+    elements.inactivitySound.checked = response.config.inactivitySound;
     await sendMessage({ type: "FETCH_ALERTS" });
     await load();
   } else {

@@ -11,6 +11,13 @@
 
 const CONFIG_KEY = "mcall_config";
 const STATUS_KEY = "mcall_status";
+// Inativos com atendente da ultima consulta que decidiu o bip. Fica no
+// storage.session: sobrevive ao service worker dormir e some ao fechar o Chrome.
+const BEEP_STATE_KEY = "mcall_inactivity_beep";
+// Base mais velha que isso (MTalk fechado, API fora do ar, bip desligado) nao
+// vale: quem passou do limite nesse meio tempo ja aparece no pop-up, e o bip
+// fica para quem passar dali em diante. Cobre o silencio de 5 minutos do "x".
+const BEEP_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 const MTALK_TICKETS_URL = "https://s11.mtalk.com.br/tickets*";
 
 const DEFAULT_CONFIG = {
@@ -20,7 +27,9 @@ const DEFAULT_CONFIG = {
   // Token da API LOCAL, emitido no painel ou por `npm run token`. E ele que diz
   // de quem sao os alertas: cada atendente cola o seu. Nada a ver com o login
   // do MTalk — a extensao continua sem tocar na sessao do MTalk.
-  apiToken: ""
+  apiToken: "",
+  // Bip quando um cliente com atendente passa do limite de inatividade.
+  inactivitySound: true
 };
 
 // Enderecos padrao antigos: quem instalou antes da VPS ficou com eles salvos no
@@ -44,6 +53,9 @@ const DEFAULT_STATUS = {
   waitingTickets: 0,
   inactiveTickets: 0
 };
+
+// Fila das decisoes de bip (ver claimInactivityBeep).
+let beepClaims = Promise.resolve();
 
 chrome.runtime.onInstalled.addListener(async () => {
   const current = await chrome.storage.local.get(CONFIG_KEY);
@@ -72,14 +84,18 @@ async function handleMessage(message) {
     case "GET_CONFIG":
       return { ok: true, config: await getConfig() };
     case "SAVE_CONFIG": {
-      const config = normalizeConfig(message.config || {});
+      // Campo que o formulario nao mandou continua como estava.
+      const config = normalizeConfig({ ...(await getConfig()), ...(message.config || {}) });
       await chrome.storage.local.set({ [CONFIG_KEY]: config });
+      // Outro token e outro recorte: a proxima consulta vira a nova base, sem
+      // bip pelos tickets que so "apareceram" por causa da troca.
+      await chrome.storage.session.remove(BEEP_STATE_KEY);
       return { ok: true, config };
     }
     case "GET_STATUS":
       return { ok: true, status: await getStatus(), config: await getConfig() };
     case "FETCH_ALERTS":
-      return fetchAlerts();
+      return fetchAlerts({ canBeep: message.canBeep === true });
     case "FORCE_COLLECT":
       return forceCollect();
     case "CHECK_API_HEALTH":
@@ -89,7 +105,9 @@ async function handleMessage(message) {
   }
 }
 
-async function fetchAlerts() {
+// canBeep vem so do content script, quando aquela aba consegue tocar o bip
+// agora. O popup da extensao consulta sem ele e nunca consome um bip.
+async function fetchAlerts({ canBeep = false } = {}) {
   const config = await getConfig();
   const endpoint = `${config.apiBaseUrl}/api/mtalk/alerts`;
 
@@ -115,7 +133,13 @@ async function fetchAlerts() {
       inactiveTickets: Number(alerts.inactive?.total || 0)
     });
 
-    return { ok: true, alerts, status };
+    const assignedIds = alerts.inactive?.assignedTicketIds;
+    const beep =
+      canBeep && config.inactivitySound && !alerts.stale && Array.isArray(assignedIds)
+        ? await claimInactivityBeep(assignedIds.map(String))
+        : false;
+
+    return { ok: true, alerts, status, beep };
   } catch (error) {
     const status = await updateStatus({ apiStatus: "erro", lastError: describeFetchFailure(error, endpoint) });
     return { ok: false, error: status.lastError, status };
@@ -141,6 +165,30 @@ async function forceCollect() {
     const status = await updateStatus({ apiStatus: "erro", lastError: describeFetchFailure(error, endpoint) });
     return { ok: false, error: status.lastError, status };
   }
+}
+
+// Diz se algum cliente com atendente passou do limite de inatividade desde a
+// consulta anterior. Cada cliente toca uma vez; se ele for respondido e parar
+// de novo, toca de novo. As chamadas vao em fila: duas abas do MTalk
+// consultando juntas nao podem as duas ganhar o mesmo bip.
+function claimInactivityBeep(assignedIds) {
+  beepClaims = beepClaims
+    .then(async () => {
+      const stored = (await chrome.storage.session.get(BEEP_STATE_KEY))[BEEP_STATE_KEY];
+      const now = Date.now();
+      const isBaseline = !stored || now - stored.at > BEEP_STATE_MAX_AGE_MS;
+      const known = new Set(isBaseline ? assignedIds : stored.ids);
+
+      await chrome.storage.session.set({ [BEEP_STATE_KEY]: { ids: assignedIds, at: now } });
+      return assignedIds.some((id) => !known.has(id));
+    })
+    // Falha no bip nunca derruba os alertas: no pior caso, fica sem bip.
+    .catch((error) => {
+      console.error("[Mcall Monitor]", error);
+      return false;
+    });
+
+  return beepClaims;
 }
 
 async function notifyMtalkTabs() {
@@ -203,7 +251,9 @@ function normalizeConfig(config) {
   const apiBaseUrl = String(config.apiBaseUrl || "").trim().replace(/\/+$/, "");
   return {
     apiBaseUrl: apiBaseUrl || DEFAULT_CONFIG.apiBaseUrl,
-    apiToken: normalizeToken(config.apiToken)
+    apiToken: normalizeToken(config.apiToken),
+    // Quem instalou antes do bip nao tem a chave salva: vale o padrao (ligado).
+    inactivitySound: config.inactivitySound !== false
   };
 }
 
