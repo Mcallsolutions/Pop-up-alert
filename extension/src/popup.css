@@ -146,11 +146,18 @@ label {
   display: grid;
   gap: 3px;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
 }
 
-.status-list div:last-child {
-  border-bottom: 0;
+/* Divisoria por cima de cada linha, e nao por baixo: quando a linha de erro
+   (a ultima) some, a de cima nao fica com uma borda sobrando. */
+.status-list div + div {
+  border-top: 1px solid var(--border);
+}
+
+/* O display: grid acima venceria o [hidden] do navegador, e a linha de erro
+   apareceria sempre, com "-". */
+.status-list div[hidden] {
+  display: none;
 }
 
 dd {

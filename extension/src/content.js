@@ -12,7 +12,7 @@
   // Bip de inatividade: tom curto e baixo, gerado na hora (sem arquivo de som).
   const BEEP_FREQUENCY_HZ = 880;
   const BEEP_SECONDS = 0.18;
-  const BEEP_VOLUME = 0.12;
+  const BEEP_VOLUME = 0.42;
 
   let refreshTimer = null;
   let alertSnoozedUntil = 0;
