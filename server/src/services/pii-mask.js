@@ -444,7 +444,19 @@ function findBankAccounts(text) {
   return [...groupRanges(text, AGENCY_RE, "CONTA_BANCARIA"), ...accounts];
 }
 
+// Chave aleatoria (UUID) e o valor que vem depois de "chave pix". "Pix" solto
+// ("vou pagar via pix", "fiz o pix 2 vezes") so conta com dois-pontos.
+const UUID_RE = /(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])/g;
+const PIX_KEY_RE =
+  /(?<![a-z])chave(?: (?:do|de|da))? pix(?![a-z])\s*(?:(?:[:=]|e|eh|sera)\s*)?(?:(?:o|a|meu|minha)\s+)?([^\s"'[\]{}()<>,;]+)/dg;
+const PIX_COLON_RE = /(?<![a-z])pix\s*[:=]\s*([^\s"'[\]{}()<>,;]+)/dg;
 
+function findPixKeys(text) {
+  const values = [...groupRanges(text, PIX_KEY_RE, "CHAVE_PIX"), ...groupRanges(text, PIX_COLON_RE, "CHAVE_PIX")].filter(
+    (range) => /[\d@+]/.test(text.slice(range.start, range.end))
+  );
+  return [...regexRanges(text, UUID_RE, "CHAVE_PIX"), ...values];
+}
 
 // Senha do Wi-Fi e login PPPoE sao comuns no suporte. Com dois-pontos ou
 // igual, o valor seguinte e sempre mascarado. Com um verbo de ligacao ("a
