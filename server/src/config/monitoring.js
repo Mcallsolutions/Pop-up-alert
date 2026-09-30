@@ -34,6 +34,20 @@ const DEFAULT_TICKET_STATUSES = ["open", "pending"];
 // A API do MTalk devolve datas em UTC e o painel do MTalk mostra em BRT. O
 // mesmo fuso define o "dia" dos filtros do painel.
 const DEFAULT_TIME_ZONE = "America/Sao_Paulo";
+// Dias de historico de coletas no banco. Cada coleta grava de novo todos os
+// tickets em atendimento, entao sem limite o banco so cresce.
+const DEFAULT_RETENTION_DAYS = 90;
+// Analise de atendimento por IA (desligada por padrao). Teto de GETs em
+// /messages/{ticketId} por coleta: a leitura e incremental e nunca pode virar
+// "uma chamada por ticket a cada minuto".
+const DEFAULT_MAX_MESSAGE_FETCHES = 20;
+// Mensagens mascaradas ficam pouco tempo: sao o dado mais sensivel do banco.
+const DEFAULT_MESSAGE_RETENTION_DAYS = 30;
+// Conversa parada ha tanto tempo (ou ticket fechado) entra na fila da IA.
+const DEFAULT_AI_ANALYSIS_IDLE_MINUTES = 20;
+const DEFAULT_AI_ANALYSIS_MIN_MESSAGES = 4;
+const DEFAULT_AI_ANALYSIS_MAX_MESSAGES = 80;
+const DEFAULT_AI_ANALYSIS_MAX_PER_HOUR = 30;
 
 function getInactivityThresholdMinutes() {
   return readPositiveInteger(process.env.INACTIVITY_THRESHOLD_MINUTES, DEFAULT_INACTIVITY_THRESHOLD_MINUTES);
@@ -41,6 +55,11 @@ function getInactivityThresholdMinutes() {
 
 function getTimeZone() {
   return String(process.env.MONITOR_TIME_ZONE || "").trim() || DEFAULT_TIME_ZONE;
+}
+
+// Zero e valido: desliga a limpeza e guarda tudo.
+function getRetentionDays() {
+  return readNonNegativeInteger(process.env.RETENTION_DAYS, DEFAULT_RETENTION_DAYS);
 }
 
 function getMtalkConfig() {
@@ -65,6 +84,27 @@ function getMtalkConfig() {
     contactTaggedCacheTtlMs: CONTACT_TAGGED_CACHE_TTL_MS,
     contactUntaggedCacheTtlMs: CONTACT_UNTAGGED_CACHE_TTL_MS,
     timeoutMs: readPositiveInteger(process.env.MTALK_TIMEOUT_MS, DEFAULT_TIMEOUT_MS)
+  };
+}
+
+// Analise de atendimento por IA. Com AI_ATTENDANCE_ANALYSIS diferente de "1"
+// o sistema se comporta como antes: nenhuma chamada a /messages e nenhuma
+// tabela nova preenchida.
+function getAttendanceConfig() {
+  return {
+    enabled: String(process.env.AI_ATTENDANCE_ANALYSIS || "").trim() === "1",
+    // Zero e valido: liga a analise sem ler mensagens novas.
+    maxMessageFetches: readNonNegativeInteger(process.env.MTALK_MAX_MESSAGE_FETCHES, DEFAULT_MAX_MESSAGE_FETCHES),
+    // Aqui zero NAO desliga a limpeza (ao contrario de RETENTION_DAYS): guardar
+    // mensagem para sempre nunca pode ser um descuido de configuracao.
+    messageRetentionDays: readPositiveInteger(process.env.MESSAGE_RETENTION_DAYS, DEFAULT_MESSAGE_RETENTION_DAYS),
+    idleMinutes: readPositiveInteger(process.env.AI_ANALYSIS_IDLE_MINUTES, DEFAULT_AI_ANALYSIS_IDLE_MINUTES),
+    minMessages: readPositiveInteger(process.env.AI_ANALYSIS_MIN_MESSAGES, DEFAULT_AI_ANALYSIS_MIN_MESSAGES),
+    maxMessages: readPositiveInteger(process.env.AI_ANALYSIS_MAX_MESSAGES, DEFAULT_AI_ANALYSIS_MAX_MESSAGES),
+    // Zero pausa a analise automatica; o botao do painel continua funcionando.
+    maxPerHour: readNonNegativeInteger(process.env.AI_ANALYSIS_MAX_PER_HOUR, DEFAULT_AI_ANALYSIS_MAX_PER_HOUR),
+    // Vazio = OPENAI_MODEL.
+    model: String(process.env.AI_ANALYSIS_MODEL || "").trim()
   };
 }
 
@@ -114,7 +154,9 @@ function normalizeToken(value) {
 
 module.exports = {
   MAX_TICKETS_PER_SNAPSHOT,
+  getAttendanceConfig,
   getInactivityThresholdMinutes,
   getMtalkConfig,
+  getRetentionDays,
   getTimeZone
 };

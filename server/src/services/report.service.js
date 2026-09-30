@@ -4,6 +4,7 @@ const { getAllowedQueues } = require("./queue-filter");
 const { normalizeAttendantName } = require("./attendant-filter");
 
 const INACTIVITY_THRESHOLD_MINUTES = getInactivityThresholdMinutes();
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Um ticket so entra nas listas quando o contato tem nome: sem ele o painel e
 // o alerta nao conseguem dizer de quem e o atendimento.
@@ -15,7 +16,7 @@ const IDENTIFIED_TICKET_SQL = `(trim(coalesce(client_name, '')) <> '')`;
 // de inatividade, onde "parado e sem responsavel" e o caso mais grave.
 const HAS_RESPONSIBLE_SQL = `(trim(coalesce(attendant, '')) <> '')`;
 
-// Prefixo comum das consultas: aplica os filtros e mantem, de cada ticket
+// Prefixo das consultas de TAG: aplica os filtros e mantem, de cada ticket
 // repetido entre coletas, apenas a leitura mais recente.
 //
 // Sao dois niveis de proposito. O recorte do token NAO pode entrar no ranking:
@@ -36,6 +37,30 @@ function buildRankedTicketsSql(where, scopeSql) {
       ),
       ranked AS (
         SELECT * FROM todas_leituras
+        WHERE rowNumber = 1${scopeSql ? ` AND ${scopeSql}` : ""}
+      )`;
+}
+
+// Prefixo das consultas de INATIVIDADE: de cada ticket, a leitura em que ele
+// passou mais tempo parado dentro do periodo. Pela leitura mais recente, quem
+// esperou 50 min de manha e depois foi atendido sumia do relatorio do dia.
+//
+// O atendente sai dessa mesma leitura: e quem estava com o ticket enquanto ele
+// ficou parado, mesmo que o ticket tenha sido transferido depois. O recorte do
+// token entra depois da escolha da leitura, pelo mesmo motivo do ranked.
+function buildPeakInactivitySql(where, scopeSql) {
+  return `
+      WITH leituras_por_parada AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY external_ticket_id
+            ORDER BY COALESCE(inactivity_minutes, 0) DESC, datetime(collected_at) DESC, id DESC
+          ) AS rowNumber
+        FROM tickets
+        ${where}
+      ),
+      pico AS (
+        SELECT * FROM leituras_por_parada
         WHERE rowNumber = 1${scopeSql ? ` AND ${scopeSql}` : ""}
       )`;
 }
@@ -61,7 +86,7 @@ const TICKET_COLUMNS_SQL = `
 
 async function getSummary(filters = {}) {
   const database = await getDatabase();
-  const { where, params, rankedSql } = buildTicketFilters(filters);
+  const { where, params, rankedSql, peakSql } = buildTicketFilters(filters);
   const readings = await database
     .prepare(`SELECT COUNT(DISTINCT snapshot_id) AS "totalReadings" FROM tickets ${where}`)
     .get(...params);
@@ -74,13 +99,24 @@ async function getSummary(filters = {}) {
         SUM(CASE WHEN tag_status = 'COM_TAG' AND ${HAS_RESPONSIBLE_SQL} THEN 1 ELSE 0 END) AS "totalWithTag",
         SUM(CASE WHEN tag_status = 'SEM_TAG' AND ${HAS_RESPONSIBLE_SQL} THEN 1 ELSE 0 END) AS "totalWithoutTag",
         SUM(CASE WHEN NOT ${HAS_RESPONSIBLE_SQL} THEN 1 ELSE 0 END) AS "totalWithoutAttendant",
-        SUM(CASE WHEN COALESCE(inactivity_minutes, 0) > ${INACTIVITY_THRESHOLD_MINUTES} THEN 1 ELSE 0 END) AS "totalInactive",
         MAX(collected_at) AS "lastCollectedAt"
       FROM ranked
       WHERE rowNumber = 1
     `
     )
     .get(...params);
+  // Inatividade conta pela maior parada de cada ticket no periodo, como nos
+  // relatorios de inatividade (buildPeakInactivitySql).
+  const inactive = await database
+    .prepare(
+      `
+      ${peakSql}
+      SELECT COUNT(*) AS "totalInactive"
+      FROM pico
+      WHERE COALESCE(inactivity_minutes, 0) > ?
+    `
+    )
+    .get(...params, INACTIVITY_THRESHOLD_MINUTES);
 
   const totalTicketsProcessed = Number(row?.totalTicketsProcessed || 0);
   const totalWithTag = Number(row?.totalWithTag || 0);
@@ -97,7 +133,8 @@ async function getSummary(filters = {}) {
     totalWithTag,
     totalWithoutTag,
     totalWithoutAttendant: Number(row?.totalWithoutAttendant || 0),
-    totalInactive: Number(row?.totalInactive || 0),
+    totalInactive: Number(inactive?.totalInactive || 0),
+    thresholdMinutes: INACTIVITY_THRESHOLD_MINUTES,
     compliancePercent,
     lastCollectedAt: row?.lastCollectedAt || null
   };
@@ -198,44 +235,46 @@ async function selectDistinctValues(database, column, where, params) {
 
 async function getInactivitySummary(filters = {}) {
   const database = await getDatabase();
-  const { where, params, rankedSql } = buildTicketFilters(filters);
+  const { where, params, peakSql } = buildTicketFilters(filters);
   const row = await database
     .prepare(
       `
-      ${rankedSql}
+      ${peakSql}
       SELECT
         COUNT(*) AS "inactiveTickets",
         MAX(COALESCE(inactivity_minutes, 0)) AS "maxInactivityMinutes",
-        AVG(COALESCE(inactivity_minutes, 0)) AS "averageInactivityMinutes",
-        MAX(collected_at) AS "lastCollectedAt"
-      FROM ranked
-      WHERE rowNumber = 1
-        AND COALESCE(inactivity_minutes, 0) > ?
+        AVG(COALESCE(inactivity_minutes, 0)) AS "averageInactivityMinutes"
+      FROM pico
+      WHERE COALESCE(inactivity_minutes, 0) > ?
         AND ${IDENTIFIED_TICKET_SQL}
     `
     )
     .get(...params, INACTIVITY_THRESHOLD_MINUTES);
+  // A leitura de pico de um ticket pode ser antiga: a ultima coleta vem da
+  // tabela, no mesmo recorte.
+  const last = await database
+    .prepare(`SELECT MAX(collected_at) AS "lastCollectedAt" FROM tickets ${where}`)
+    .get(...params);
 
   return {
     thresholdMinutes: INACTIVITY_THRESHOLD_MINUTES,
     inactiveTickets: Number(row?.inactiveTickets || 0),
     maxInactivityMinutes: Number(row?.maxInactivityMinutes || 0),
     averageInactivityMinutes: roundAverage(row?.averageInactivityMinutes),
-    lastCollectedAt: row?.lastCollectedAt || null
+    lastCollectedAt: last?.lastCollectedAt || null
   };
 }
 
 async function getInactiveTickets(filters = {}) {
   const database = await getDatabase();
-  const { where, params, rankedSql } = buildTicketFilters(filters);
+  const { params, peakSql } = buildTicketFilters(filters);
   const rows = await database
     .prepare(
       `
-      ${rankedSql}
+      ${peakSql}
       SELECT ${TICKET_COLUMNS_SQL}
-      FROM ranked
-      WHERE rowNumber = 1
-        AND COALESCE(inactivity_minutes, 0) > ?
+      FROM pico
+      WHERE COALESCE(inactivity_minutes, 0) > ?
         AND ${IDENTIFIED_TICKET_SQL}
       ORDER BY COALESCE(inactivity_minutes, 0) DESC, datetime(collected_at) DESC, id DESC
       LIMIT ?
@@ -256,19 +295,18 @@ async function getInactivityByCompany(filters = {}) {
 
 async function getInactivityGroupedBy(filters, expression, alias, extraCondition = "1 = 1") {
   const database = await getDatabase();
-  const { where, params, rankedSql } = buildTicketFilters(filters);
+  const { params, peakSql } = buildTicketFilters(filters);
   const rows = await database
     .prepare(
       `
-      ${rankedSql}
+      ${peakSql}
       SELECT
         ${expression} AS ${alias},
         COUNT(*) AS "inactiveTickets",
         MAX(COALESCE(inactivity_minutes, 0)) AS "maxInactivityMinutes",
         AVG(COALESCE(inactivity_minutes, 0)) AS "averageInactivityMinutes"
-      FROM ranked
-      WHERE rowNumber = 1
-        AND COALESCE(inactivity_minutes, 0) > ?
+      FROM pico
+      WHERE COALESCE(inactivity_minutes, 0) > ?
         AND ${IDENTIFIED_TICKET_SQL}
         AND ${extraCondition}
       GROUP BY ${expression}
@@ -318,30 +356,13 @@ function buildTicketFilters(filters = {}) {
   const params = [];
   const allowedQueues = getAllowedQueues();
 
-  conditions.push(`queue_name IN (${allowedQueues.map(() => "?").join(", ")})`);
+  // O "+" tira esta condicao da escolha de indice. A coleta so grava tickets das
+  // filas monitoradas, entao ela casa com quase todas as linhas — e sem o "+" o
+  // SQLite preferia o indice de fila ao de data e varria a tabela inteira.
+  conditions.push(`+queue_name IN (${allowedQueues.map(() => "?").join(", ")})`);
   params.push(...allowedQueues);
 
-  // collected_at e gravado na hora local da operacao com o offset
-  // ("2026-09-15T21:40:05-03:00"), entao o dia e os limites comparam o texto
-  // local direto, sem conversao de fuso.
-  const day = normalizeDateOnly(filters.day);
-  if (day) {
-    conditions.push("substr(collected_at, 1, 10) = ?");
-    params.push(day);
-  }
-
-  const startDate = normalizeDateTimeFilter(filters.startDate, "start");
-  if (!day && startDate) {
-    conditions.push("substr(collected_at, 1, 19) >= ?");
-    params.push(startDate);
-  }
-
-  const endDate = normalizeDateTimeFilter(filters.endDate, "end");
-  if (!day && endDate) {
-    conditions.push("substr(collected_at, 1, 19) <= ?");
-    params.push(endDate);
-  }
-
+  appendDateRange(conditions, params, "collected_at", filters);
   addAttendantFilter(conditions, params, filters.attendant);
   addLikeFilter(conditions, params, "queue_name", filters.queue);
   addNormalizedLikeFilter(conditions, params, "company", filters.company);
@@ -358,9 +379,41 @@ function buildTicketFilters(filters = {}) {
     // Ja com o recorte: serve as consultas que leem a tabela direto.
     where: scope.sql ? `WHERE ${[...conditions, scope.sql].join(" AND ")}` : baseWhere,
     params: [...params, ...scope.params],
-    // Consultas que precisam da leitura mais recente de cada ticket usam este.
-    rankedSql: buildRankedTicketsSql(baseWhere, scope.sql)
+    // Consultas de TAG: a leitura mais recente de cada ticket.
+    rankedSql: buildRankedTicketsSql(baseWhere, scope.sql),
+    // Consultas de inatividade: a leitura de maior parada de cada ticket.
+    peakSql: buildPeakInactivitySql(baseWhere, scope.sql)
   };
+}
+
+// Filtro de dia/intervalo sobre uma coluna gravada com toZonedIso. Tambem usado
+// pela analise de atendimento (attendance_analyses.created_at).
+//
+// A coluna e gravada na hora local da operacao com o offset
+// ("2026-09-15T21:40:05-03:00"), e os limites vao no mesmo formato sem o
+// offset: a leitura das 00:00:00 em ponto fica "maior" que o limite so pelo
+// offset e cai no dia certo. Comparar a coluna crua — e nao
+// substr(coluna, ...) — e o que deixa o SQLite usar o indice de data.
+function appendDateRange(conditions, params, column, filters = {}) {
+  const day = normalizeDateOnly(filters.day);
+  if (day) {
+    const inicio = checkedDateTime(`${day}T00:00:00`);
+    conditions.push(`${column} >= ?`, `${column} < ?`);
+    params.push(inicio, shiftDateTime(inicio, DAY_MS));
+  }
+
+  const startDate = normalizeDateTimeFilter(filters.startDate, "start");
+  if (!day && startDate) {
+    conditions.push(`${column} >= ?`);
+    params.push(checkedDateTime(startDate));
+  }
+
+  // O fim inclui o segundo informado inteiro: tudo antes do segundo seguinte.
+  const endDate = normalizeDateTimeFilter(filters.endDate, "end");
+  if (!day && endDate) {
+    conditions.push(`${column} < ?`);
+    params.push(shiftDateTime(checkedDateTime(endDate), 1000));
+  }
 }
 
 // Recorte do token de atendente: os tickets dele mais TODOS os que estao sem
@@ -392,14 +445,14 @@ function addLikeFilter(conditions, params, column, value) {
 
 // O atendente ja e gravado normalizado ("Alek" vira "Aleksandro"), entao a
 // busca tenta o texto digitado e tambem o nome canonico dele.
-function addAttendantFilter(conditions, params, value) {
+function addAttendantFilter(conditions, params, value, column = "attendant") {
   const cleanValue = String(value || "").trim();
   if (!cleanValue) {
     return;
   }
 
   const normalized = normalizeAttendantName(cleanValue) || cleanValue;
-  conditions.push("(UPPER(attendant) LIKE UPPER(?) OR UPPER(attendant) LIKE UPPER(?))");
+  conditions.push(`(UPPER(${column}) LIKE UPPER(?) OR UPPER(${column}) LIKE UPPER(?))`);
   params.push(`%${cleanValue}%`, `%${normalized}%`);
 }
 
@@ -441,6 +494,25 @@ function normalizeDateTimeFilter(value, boundary) {
   }
 
   return "";
+}
+
+// Data com o formato certo mas impossivel ("2026-09-31") vira 400: o Date do
+// JavaScript "arredondaria" para 01/10 e o filtro traria o dia errado.
+function checkedDateTime(value) {
+  const date = new Date(`${value}Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 19) !== value) {
+    const error = new Error(`Data invalida no filtro: ${value.replace("T", " ")}`);
+    error.statusCode = 400;
+    error.publicMessage = error.message;
+    throw error;
+  }
+  return value;
+}
+
+// Soma ms a um "YYYY-MM-DDTHH:MM:SS" ja validado. O texto e tratado como UTC so
+// para a conta de calendario: nenhum fuso entra aqui.
+function shiftDateTime(value, ms) {
+  return new Date(new Date(`${value}Z`).getTime() + ms).toISOString().slice(0, 19);
 }
 
 function normalizeComparableText(value) {
@@ -492,6 +564,10 @@ function withInactivityStats(row) {
 }
 
 module.exports = {
+  addAttendantFilter,
+  addLikeFilter,
+  addNormalizedLikeFilter,
+  appendDateRange,
   getSummary,
   getFilterOptions,
   getMissingTags,

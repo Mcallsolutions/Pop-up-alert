@@ -16,7 +16,7 @@ const { explainError, loadEnv } = require("./cli-env");
 loadEnv();
 
 const { initializeDatabase } = require("../database");
-const { createToken, listTokens, revokeToken } = require("../services/token.service");
+const { createToken, isOpenModeAllowed, listTokens, revokeToken } = require("../services/token.service");
 
 const USO = `
 Uso: npm run token -- <comando> [opcoes]
@@ -59,7 +59,11 @@ async function comandoListar() {
   const { items } = await listTokens();
 
   if (!items.length) {
-    console.log("\nNenhum token cadastrado: a extensao esta em modo aberto (todo mundo ve tudo).\n");
+    console.log(
+      isOpenModeAllowed()
+        ? "\nNenhum token cadastrado: a extensao esta em modo aberto (todo mundo ve tudo).\n"
+        : "\nNenhum token cadastrado: a extensao recebe 401 ate voce emitir um.\n"
+    );
     return;
   }
 

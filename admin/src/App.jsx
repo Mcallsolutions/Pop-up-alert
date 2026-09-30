@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, Clock, LayoutDashboard, LogOut, Settings, Sparkles, Tags } from "lucide-react";
+import { BarChart3, Clock, Headset, LayoutDashboard, LogOut, Settings, Sparkles, Tags } from "lucide-react";
 import Dashboard from "./pages/Dashboard";
 import Inactivity from "./pages/Inactivity";
 import Reports from "./pages/Reports";
 import AiPage from "./pages/AI";
+import AttendancePage from "./pages/Attendance";
 import SettingsPage from "./pages/Settings";
 import LoginGate from "./components/LoginGate";
 import { SESSION_EXPIRED_EVENT, api } from "./services/api";
@@ -13,6 +14,7 @@ const views = [
   { id: "reports", label: "Relatorios", icon: BarChart3 },
   { id: "inactivity", label: "Inatividade", icon: Clock },
   { id: "ai", label: "IA", icon: Sparkles },
+  { id: "attendance", label: "Atendimento IA", icon: Headset },
   { id: "settings", label: "Configuracoes", icon: Settings }
 ];
 
@@ -75,6 +77,7 @@ export default function App() {
     if (view === "reports") return <Reports />;
     if (view === "inactivity") return <Inactivity />;
     if (view === "ai") return <AiPage />;
+    if (view === "attendance") return <AttendancePage />;
     if (view === "settings") return <SettingsPage />;
     return <Dashboard />;
   }, [view]);

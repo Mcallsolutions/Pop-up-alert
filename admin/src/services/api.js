@@ -129,6 +129,22 @@ export const api = {
   },
   aiSummaries(limit = 10) {
     return request(`/api/ai/summaries${toQuery({ limit })}`);
+  },
+  // Analise de atendimento por IA (AI_ATTENDANCE_ANALYSIS=1 na API).
+  attendanceStatus() {
+    return request("/api/attendance/status");
+  },
+  attendanceAnalyses(filters = {}) {
+    return request(`/api/attendance/analyses${toQuery(filters)}`);
+  },
+  attendanceAnalysis(id) {
+    return request(`/api/attendance/analyses/${encodeURIComponent(id)}`);
+  },
+  attendanceByAttendant(filters = {}) {
+    return request(`/api/attendance/by-attendant${toQuery(filters)}`);
+  },
+  analyzeTicket(ticketId) {
+    return request(`/api/attendance/tickets/${encodeURIComponent(ticketId)}/analyze`, { method: "POST" });
   }
 };
 

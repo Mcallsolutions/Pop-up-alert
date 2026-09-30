@@ -10,7 +10,14 @@ const PROMPT_KINDS = [
   { id: "TREINAMENTO", label: "Treinamento", hint: "Exemplo de analise/estilo para a IA imitar." }
 ];
 
-const emptyPrompt = { id: null, title: "", kind: "INSTRUCAO", content: "", isActive: true };
+// Onde o prompt entra: o resumo gerencial desta pagina ou a avaliacao de cada
+// conversa (pagina Atendimento IA). Um nunca recebe os prompts do outro.
+const PROMPT_SCOPES = [
+  { id: "RESUMO", label: "Resumo gerencial", hint: "Enviado junto com os dados a cada resumo desta pagina." },
+  { id: "ATENDIMENTO", label: "Analise de atendimento", hint: "Enviado junto com cada conversa avaliada em Atendimento IA." }
+];
+
+const emptyPrompt = { id: null, title: "", kind: "INSTRUCAO", scope: "RESUMO", content: "", isActive: true };
 
 // O historico ja vem do mais recente para o mais antigo, entao o primeiro que
 // bater com o recorte da tela e o resumo valido para ele.
@@ -89,6 +96,7 @@ export default function AiPage() {
       const payload = {
         title: draft.title,
         kind: draft.kind,
+        scope: draft.scope || "RESUMO",
         content: draft.content,
         isActive: draft.isActive
       };
@@ -220,7 +228,10 @@ export default function AiPage() {
       <div className="section-toolbar">
         <div>
           <h2>Treinamento Adalberto</h2>
-          <p>Tudo que estiver ativo aqui e enviado junto com os dados a cada resumo, deixando o Adalberto mais assertivo.</p>
+          <p>
+            Tudo que estiver ativo aqui e enviado junto com os dados, deixando o Adalberto mais assertivo. Cada item vale so para o
+            uso escolhido: o resumo gerencial ou a analise de atendimento.
+          </p>
         </div>
       </div>
 
@@ -246,6 +257,21 @@ export default function AiPage() {
             ))}
           </select>
           <small>{PROMPT_KINDS.find((kind) => kind.id === draft.kind)?.hint}</small>
+        </label>
+
+        <label>
+          Usado em
+          <select
+            value={draft.scope || "RESUMO"}
+            onChange={(event) => setDraft((current) => ({ ...current, scope: event.target.value }))}
+          >
+            {PROMPT_SCOPES.map((scope) => (
+              <option key={scope.id} value={scope.id}>
+                {scope.label}
+              </option>
+            ))}
+          </select>
+          <small>{PROMPT_SCOPES.find((scope) => scope.id === (draft.scope || "RESUMO"))?.hint}</small>
         </label>
 
         <label>
@@ -294,6 +320,9 @@ export default function AiPage() {
                   <div>
                     <strong>{prompt.title}</strong>
                     <span className="badge">{PROMPT_KINDS.find((kind) => kind.id === prompt.kind)?.label || prompt.kind}</span>
+                    <span className="badge">
+                      {PROMPT_SCOPES.find((scope) => scope.id === (prompt.scope || "RESUMO"))?.label || prompt.scope}
+                    </span>
                     <span className={prompt.isActive ? "badge ativo" : "badge"}>
                       {prompt.isActive ? "Ativo" : "Inativo"}
                     </span>

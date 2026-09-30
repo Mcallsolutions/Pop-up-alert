@@ -34,6 +34,18 @@ function normalizeAttendantName(value) {
   return text;
 }
 
+// Nomes conhecidos (canonicos e apelidos). O mascaramento de mensagens
+// (pii-mask.js) troca qualquer um deles por [ATENDENTE].
+function listKnownAttendantNames() {
+  return [...new Set([...ATTENDANT_ALIASES.keys(), ...ATTENDANT_ALIASES.values()])];
+}
+
+// Sufixos de empresa nao sao nome de pessoa: o mascaramento nao pode trocar
+// "MIX" por [ATENDENTE] so porque um cadastro se chama "Alek MIX".
+function listCompanyTokens() {
+  return [...COMPANY_TOKENS];
+}
+
 function isCompanySuffix(value) {
   const compact = String(value || "").replace(/[^A-Z0-9]/g, "");
   return Boolean(compact) && COMPANY_TOKENS.some((token) => compact.startsWith(token));
@@ -54,5 +66,7 @@ function cleanText(value) {
 }
 
 module.exports = {
+  listCompanyTokens,
+  listKnownAttendantNames,
   normalizeAttendantName
 };

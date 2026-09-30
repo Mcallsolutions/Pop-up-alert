@@ -11,6 +11,9 @@ const {
 } = require("./report.service");
 
 const PROMPT_KINDS = ["INSTRUCAO", "TREINAMENTO"];
+// RESUMO = resumo gerencial desta pagina; ATENDIMENTO = analise de cada
+// conversa (attendance-analysis.service). Cada um so recebe os proprios.
+const PROMPT_SCOPES = ["RESUMO", "ATENDIMENTO"];
 const MAX_PROMPT_TITLE = 120;
 const MAX_PROMPT_CONTENT = 8000;
 // Quantas linhas de ticket vao no contexto. Mais que isso estoura o prompt sem
@@ -66,7 +69,7 @@ const SUMMARY_JSON_SCHEMA = {
 
 const BASE_SYSTEM_PROMPT = [
   "Voce e o analista de operacao de atendimento da Mcall.",
-  "Recebe dados ja consolidados de tickets do MTalk (uso de TAG e tempo sem resposta) e escreve um resumo gerencial em portugues do Brasil.",
+  "Recebe dados ja consolidados de tickets do MTalk (uso de TAG e tempo de ticket parado) e escreve um resumo gerencial em portugues do Brasil.",
   "Regras: use apenas os numeros recebidos, nunca invente nomes, clientes ou metricas; se um dado nao existir, diga que nao ha informacao;",
   "seja objetivo e direto ao ponto, sempre citando os numeros que sustentam cada afirmacao.",
   "",
@@ -77,6 +80,10 @@ const BASE_SYSTEM_PROMPT = [
   "Sobre atendimento sem responsavel: 'totais.totalWithoutAttendant' sao tickets aguardando na fila, que ninguem assumiu.",
   "Eles nao entram nos numeros de TAG (nao ha a quem cobrar) mas contam na inatividade. Nao os trate como falha de atendente.",
   "",
+  "Sobre inatividade: os minutos medem quanto tempo o ticket ficou sem nenhuma movimentacao no MTalk (de cada ticket, a maior parada dentro do periodo).",
+  "Esse numero NAO diz quem estava esperando: pode ser o cliente aguardando o atendente ou o atendente aguardando o cliente.",
+  "Fale em 'ticket parado' ou 'sem atividade'; nunca afirme que o atendente deixou o cliente sem resposta.",
+  "",
   "Responda SEMPRE com um unico objeto JSON valido, sem texto fora do JSON, seguindo exatamente este formato:",
   JSON.stringify(SUMMARY_SCHEMA, null, 2)
 ].join("\n");
@@ -85,9 +92,9 @@ async function listPrompts() {
   const database = await getDatabase();
   const rows = await database
     .prepare(
-      `SELECT id, title, kind, content, is_active AS "isActive", created_at AS "createdAt", updated_at AS "updatedAt"
+      `SELECT id, title, kind, scope, content, is_active AS "isActive", created_at AS "createdAt", updated_at AS "updatedAt"
        FROM ai_prompts
-       ORDER BY kind, id`
+       ORDER BY scope, kind, id`
     )
     .all();
 
@@ -101,10 +108,10 @@ async function createPrompt(payload) {
 
   const result = await database
     .prepare(
-      `INSERT INTO ai_prompts (title, kind, content, is_active, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ai_prompts (title, kind, scope, content, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(prompt.title, prompt.kind, prompt.content, prompt.isActive ? 1 : 0, now, now);
+    .run(prompt.title, prompt.kind, prompt.scope, prompt.content, prompt.isActive ? 1 : 0, now, now);
 
   return getPrompt(result.lastInsertRowid);
 }
@@ -120,8 +127,8 @@ async function updatePrompt(id, payload) {
   const prompt = validatePromptPayload({ ...current, ...payload });
 
   await database
-    .prepare("UPDATE ai_prompts SET title = ?, kind = ?, content = ?, is_active = ?, updated_at = ? WHERE id = ?")
-    .run(prompt.title, prompt.kind, prompt.content, prompt.isActive ? 1 : 0, new Date().toISOString(), current.id);
+    .prepare("UPDATE ai_prompts SET title = ?, kind = ?, scope = ?, content = ?, is_active = ?, updated_at = ? WHERE id = ?")
+    .run(prompt.title, prompt.kind, prompt.scope, prompt.content, prompt.isActive ? 1 : 0, new Date().toISOString(), current.id);
 
   return getPrompt(current.id);
 }
@@ -142,7 +149,7 @@ async function getPrompt(id) {
   const database = await getDatabase();
   const row = await database
     .prepare(
-      `SELECT id, title, kind, content, is_active AS "isActive", created_at AS "createdAt", updated_at AS "updatedAt"
+      `SELECT id, title, kind, scope, content, is_active AS "isActive", created_at AS "createdAt", updated_at AS "updatedAt"
        FROM ai_prompts
        WHERE id = ?`
     )
@@ -155,9 +162,9 @@ async function getStatus() {
   const database = await getDatabase();
   const prompts = await database
     .prepare(
-      `SELECT kind, COUNT(*) AS total, SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS ativos
+      `SELECT scope, kind, COUNT(*) AS total, SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS ativos
        FROM ai_prompts
-       GROUP BY kind`
+       GROUP BY scope, kind`
     )
     .all();
   const ultimo = await getLatestSummary();
@@ -165,6 +172,7 @@ async function getStatus() {
   return {
     openai: getOpenAiStatus(),
     prompts: prompts.map((row) => ({
+      escopo: row.scope,
       tipo: row.kind,
       total: Number(row.total || 0),
       ativos: Number(row.ativos || 0)
@@ -315,7 +323,8 @@ function buildSample(items, total, extras = {}) {
 }
 
 // O horario que interessa para a IA e o do ticket (display_time), nao o da
-// coleta — mesma leitura que o painel passou a mostrar.
+// coleta — mesma leitura que o painel passou a mostrar. Nos inativos ele marca
+// o inicio da parada.
 function toContextTicket(ticket) {
   return {
     cliente: ticket.clientName || "",
@@ -323,16 +332,35 @@ function toContextTicket(ticket) {
     atendente: ticket.attendant || "",
     empresa: ticket.company || "",
     horarioDoTicket: ticket.displayTime || "",
-    minutosSemResposta: ticket.inactivityMinutes ?? null,
+    minutosParado: ticket.inactivityMinutes ?? null,
     tag: ticket.tag || null
   };
 }
 
 function buildMessages(prompts, contexto) {
-  const instrucoes = prompts.filter((prompt) => prompt.kind === "INSTRUCAO" && prompt.isActive);
-  const treinamentos = prompts.filter((prompt) => prompt.kind === "TREINAMENTO" && prompt.isActive);
+  return [
+    { role: "system", content: composeSystemPrompt(BASE_SYSTEM_PROMPT, prompts, "RESUMO") },
+    {
+      role: "user",
+      content: [
+        "Analise os dados de operacao abaixo e devolva o resumo no formato JSON combinado.",
+        "```json",
+        JSON.stringify(contexto),
+        "```"
+      ].join("\n")
+    }
+  ];
+}
 
-  const system = [BASE_SYSTEM_PROMPT];
+// Prompt de sistema = base + instrucoes e treinamentos ATIVOS daquele escopo.
+// Compartilhado com a analise de atendimento, para os dois usarem o mesmo
+// formato.
+function composeSystemPrompt(basePrompt, prompts, scope) {
+  const doEscopo = (prompts || []).filter((prompt) => (prompt.scope || "RESUMO") === scope && prompt.isActive);
+  const instrucoes = doEscopo.filter((prompt) => prompt.kind === "INSTRUCAO");
+  const treinamentos = doEscopo.filter((prompt) => prompt.kind === "TREINAMENTO");
+
+  const system = [basePrompt];
 
   if (instrucoes.length) {
     system.push(
@@ -348,24 +376,14 @@ function buildMessages(prompts, contexto) {
     );
   }
 
-  return [
-    { role: "system", content: system.join("\n") },
-    {
-      role: "user",
-      content: [
-        "Analise os dados de operacao abaixo e devolva o resumo no formato JSON combinado.",
-        "```json",
-        JSON.stringify(contexto),
-        "```"
-      ].join("\n")
-    }
-  ];
+  return system.join("\n");
 }
 
 function validatePromptPayload(payload) {
   const title = cleanText(payload?.title, MAX_PROMPT_TITLE);
   const content = cleanMultilineText(payload?.content, MAX_PROMPT_CONTENT);
   const kind = String(payload?.kind || "INSTRUCAO").trim().toUpperCase();
+  const scope = String(payload?.scope || "RESUMO").trim().toUpperCase();
 
   if (!title) {
     throwValidation("Informe um titulo para o prompt");
@@ -379,9 +397,14 @@ function validatePromptPayload(payload) {
     throwValidation(`Tipo invalido. Use ${PROMPT_KINDS.join(" ou ")}.`);
   }
 
+  if (!PROMPT_SCOPES.includes(scope)) {
+    throwValidation(`Escopo invalido. Use ${PROMPT_SCOPES.join(" ou ")}.`);
+  }
+
   return {
     title,
     kind,
+    scope,
     content,
     isActive: payload?.isActive === undefined ? true : Boolean(payload.isActive)
   };
@@ -392,6 +415,7 @@ function normalizePromptRow(row) {
     id: Number(row.id),
     title: row.title,
     kind: row.kind,
+    scope: row.scope || "RESUMO",
     content: row.content,
     isActive: Number(row.isActive) === 1,
     createdAt: row.createdAt,
@@ -467,6 +491,7 @@ function throwValidation(message, statusCode = 400) {
 }
 
 module.exports = {
+  composeSystemPrompt,
   createPrompt,
   deletePrompt,
   generateSummary,

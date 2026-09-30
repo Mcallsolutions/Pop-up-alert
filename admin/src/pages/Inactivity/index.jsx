@@ -5,7 +5,10 @@ import { api } from "../../services/api";
 import { buildFileName, exportDocx, exportPdf } from "../../services/export";
 import { formatDateTime, formatMinutes, formatTicketDateTime } from "../../services/datetime";
 
-const EXPORT_HEADERS = ["Cliente", "Fila", "Atendente", "Empresa", "Horario do ticket", "Minutos sem resposta", "URL"];
+// A inatividade vem do updatedAt do ticket, que nao diz quem estava esperando
+// (cliente ou atendente): por isso "parado", e nao "sem resposta". De cada
+// ticket vale a maior parada no periodo, com o atendente daquele momento.
+const EXPORT_HEADERS = ["Cliente", "Fila", "Atendente", "Empresa", "Parado desde", "Maior parada (min)", "URL"];
 
 export default function Inactivity() {
   const [filters, setFilters] = useState(emptyFilters);
@@ -52,7 +55,7 @@ export default function Inactivity() {
 
   function buildExportMeta() {
     return {
-      title: "Clientes sem resposta",
+      title: "Tickets parados",
       subtitle: [describeFilters(filters), `Limite: ${summary?.thresholdMinutes || 15} min`].join("  |  "),
       headers: EXPORT_HEADERS,
       rows: tickets.map((ticket) => [
@@ -88,7 +91,10 @@ export default function Inactivity() {
       <div className="section-toolbar">
         <div>
           <h2>Dashboard de inatividade</h2>
-          <p>Clientes identificados sem resposta ha mais de {summary?.thresholdMinutes || 15} minutos.</p>
+          <p>
+            Tickets de clientes identificados que ficaram mais de {summary?.thresholdMinutes || 15} minutos sem nenhuma
+            atividade no periodo (a maior parada de cada um).
+          </p>
         </div>
         <button className="secondary-button" type="button" onClick={() => load()}>
           <RefreshCw aria-hidden="true" size={17} />
@@ -110,14 +116,14 @@ export default function Inactivity() {
 
       <div className="metric-grid">
         <Metric label="Clientes inativos" value={summary?.inactiveTickets || 0} tone="warning" />
-        <Metric label="Maior espera" value={formatMinutes(summary?.maxInactivityMinutes)} tone="danger" />
-        <Metric label="Media de espera" value={formatMinutes(summary?.averageInactivityMinutes)} />
+        <Metric label="Maior parada" value={formatMinutes(summary?.maxInactivityMinutes)} tone="danger" />
+        <Metric label="Media das paradas" value={formatMinutes(summary?.averageInactivityMinutes)} />
         <Metric label="Limite" value={`${summary?.thresholdMinutes || 15} min`} />
         <Metric label="Ultima coleta" value={formatDateTime(summary?.lastCollectedAt)} compact />
       </div>
 
       <section className="table-panel">
-        <h3>Clientes sem resposta</h3>
+        <h3>Tickets parados</h3>
         <div className="table-scroll">
           <table>
             <thead>
@@ -126,8 +132,8 @@ export default function Inactivity() {
                 <th>Fila</th>
                 <th>Atendente</th>
                 <th>Empresa</th>
-                <th>Horario do ticket</th>
-                <th>Sem resposta</th>
+                <th>Parado desde</th>
+                <th>Maior parada</th>
               </tr>
             </thead>
             <tbody>
@@ -183,7 +189,7 @@ function MiniReport({ title, rows, labelKey }) {
             <tr>
               <th>Nome</th>
               <th>Inativos</th>
-              <th>Maior espera</th>
+              <th>Maior parada</th>
               <th>Media</th>
             </tr>
           </thead>
