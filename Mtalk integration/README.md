@@ -61,15 +61,18 @@ Por coleta (padrao de 1 minuto, `MTALK_COLLECT_INTERVAL_SECONDS`):
 | `GET /backend/queue` | traduzir os nomes das filas monitoradas nos ids do `queueIds` | 1x a cada 60 min (cache) |
 | `GET /backend/tags/list` | nomear TAG que chega so com o id | so quando isso acontece; cache de 10 min |
 | `GET /backend/contacts/{id}` | TAG do cliente, quando a listagem nao a traz | so ticket sem TAG e com atendente; cache por contato; ate 20 consultas novas por coleta |
+| `GET /backend/messages/{ticketId}` (com `minUpdatedAt` e `nextId`, **nunca** `markAsRead`) | conversa do ticket, para a [analise de atendimento](../README.md#analise-de-atendimento-ia) | **so com `AI_ATTENDANCE_ANALYSIS=1`**; depois da coleta gravada, sem atrasar os alertas; so ticket que mudou ou que acabou de sair da listagem; ate `MTALK_MAX_MESSAGE_FETCHES` (20) por coleta |
 
-Ou seja: **2 requisicoes por coleta** no caso comum. Nao existe chamada por
-ticket.
+Ou seja: **2 requisicoes por coleta** no caso comum. Com a analise de atendimento
+desligada (padrao) nao existe chamada por ticket; ligada, as leituras de mensagem
+tem teto proprio por coleta.
 
 ### O que fica de fora de proposito
 
 | Chamada do painel | Por que o monitor nao usa |
 | --- | --- |
-| `GET /backend/messages/{ticketId}?markAsRead=true` | marcaria a conversa como lida para o atendente. O monitor nao le conteudo de mensagem. |
+| `markAsRead=true` em `GET /backend/messages/{ticketId}` | marcaria a conversa como lida para o atendente. O monitor le as mensagens so com a analise de atendimento ligada, e `listMessages` nem aceita esse parametro (um teste prova que ele nunca entra na URL). |
+| `GET /backend/messages/{contactId}/history` e o Socket.IO (`appMessage`) | historico de outros tickets do contato e tempo real ficam fora desta fase: a leitura e incremental, dentro da coleta. |
 | `POST /backend/messages/{ticketId}`, `POST /backend/ticket-notes`, `POST`/`DELETE /backend/tickets/{id}/tags`, `PUT /backend/tickets/{id}` | escrita: a mensagem de teste do levantamento chegou ao WhatsApp real do cliente. O cliente HTTP do servidor so tem leituras (`GET`). |
 | `GET /backend/settings/*`, `/users/list`, `/quick-messages/list`, `/chats`, `/ticket-notes/list`, `/tickets/u/{uuid}` | servem para montar a tela; nenhum desses dados entra no alerta ou no relatorio. |
 
@@ -84,8 +87,45 @@ ticket.
 - **Uma coleta por vez**: o botao "Coletar agora" durante uma coleta agendada
   espera a que ja esta rodando em vez de dobrar as chamadas.
 
+- **Mensagens** (`/messages/{ticketId}`, so com a analise ligada): cursor por
+  ticket (`last_message_updated_at`, enviado como `minUpdatedAt`), teto de
+  `MTALK_MAX_MESSAGE_FETCHES` por coleta e trava propria — se a leitura anterior
+  ainda roda, a da coleta seguinte e pulada.
+
 A conta de requisicoes aparece em **Configuracoes** do painel e em
-`requisicoesPorEndpoint` na resposta de `POST /api/mtalk/collect`.
+`requisicoesPorEndpoint` na resposta de `POST /api/mtalk/collect` (a chave
+`GET /messages/{ticketId}` so existe com a analise ligada e e preenchida logo
+depois da coleta, porque a leitura roda em segundo plano).
+
+### Checklist antes de ligar a analise de atendimento
+
+Os fatos abaixo foram confirmados no codigo do Ticketz; o MTalk e um fork e pode
+diferir. Antes de por `AI_ATTENDANCE_ANALYSIS=1` em producao, valide com **um
+ticket de teste** na instancia real (conversa com um numero da propria equipe):
+
+1. **`markAsRead`**: abra o ticket de teste, mande uma mensagem pelo WhatsApp de
+   teste sem abrir a conversa no MTalk e chame
+   `GET /backend/messages/{ticketId}` sem `markAsRead`. O `unreadMessages` do
+   ticket (em `GET /backend/tickets`) precisa continuar maior que zero.
+2. **`userId`**: a resposta traz `userId` em cada mensagem? Se trouxer, o
+   monitor ja usa como sinal de ATENDENTE; se nao, vale so a assinatura.
+3. **`minUpdatedAt`**: chame com `minUpdatedAt` igual ao `updatedAt` da ultima
+   mensagem. Confira se volta so o que mudou depois (e se usa `>` ou `>=`), se
+   `hasMore`/`nextId` continuam valendo e se a resposta inclui mensagens de
+   tickets anteriores do mesmo contato (o monitor descarta as de outro
+   `ticketId`).
+4. **`mediaType`**: mande texto, audio, imagem com legenda, documento,
+   figurinha, localizacao, contato e uma reacao. Anote os valores de
+   `mediaType` (tipo do WhatsApp ou prefixo de mimetype). O monitor grava o
+   valor cru em `messages.media_type`, entao da para conferir depois com
+   `SELECT DISTINCT media_type FROM messages`.
+5. **Assinatura**: com a assinatura ligada, confira o comeco do `body` de uma
+   mensagem do atendente. O monitor espera `*Nome:*` seguido de quebra de linha
+   (aceita tambem `*Nome*:`). Se for outro formato, as mensagens humanas caem
+   como EMPRESA em vez de ATENDENTE.
+
+Depois de ligar, acompanhe em **Configuracoes > Analise de atendimento (IA)** a
+ultima leitura e o orcamento da hora.
 
 ## Identificacao das TAGs
 
@@ -143,6 +183,11 @@ linha por ticket; os relatorios usam `external_ticket_id` (o id do ticket no
 MTalk) para ficar com uma leitura por ticket: a mais recente nos de TAG e a de
 maior parada no periodo nos de inatividade. Leituras com mais de
 `RETENTION_DAYS` dias (padrao 90) sao apagadas sozinhas.
+
+Com a analise de atendimento ligada, as mensagens vao para a tabela `messages`
+**ja mascaradas** (so `body_masked`; o texto original nunca e gravado), com
+`message_sync` guardando o cursor de cada ticket. As duas saem depois de
+`MESSAGE_RETENTION_DAYS` dias (padrao 30).
 
 `collected_at` e gravado na hora local da operacao com o offset
 (`2026-09-15T21:40:05-03:00`), para que o filtro de dia do painel seja o dia de

@@ -256,6 +256,83 @@ const MIGRATIONS = {
     -- ON DELETE CASCADE procura as leituras de cada um por snapshot_id. Sem este
     -- indice, cada snapshot apagado varreria a tabela tickets inteira.
     CREATE INDEX IF NOT EXISTS idx_tickets_snapshot_id ON tickets(snapshot_id);
+  `,
+  "005_attendance_analysis.sql": `
+    -- Analise de atendimento por IA (AI_ATTENDANCE_ANALYSIS=1; desligada por
+    -- padrao, e ai estas tabelas ficam vazias).
+    --
+    -- Mensagens do MTalk JA MASCARADAS: o texto original nunca e gravado
+    -- (services/pii-mask.js roda antes). pii_found guarda so a contagem por tipo
+    -- ({"CPF":1}), nunca o valor. id e o id da mensagem no MTalk: edicao e
+    -- exclusao atualizam a mesma linha, e a excluida fica com body_masked NULL.
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      ticket_id TEXT NOT NULL,
+      from_me INTEGER,
+      sender_kind TEXT CHECK (sender_kind IN ('CLIENTE', 'ATENDENTE', 'EMPRESA', 'AUTOMATICA')),
+      attendant TEXT,
+      media_type TEXT,
+      body_masked TEXT,
+      body_length INTEGER,
+      pii_found TEXT,
+      flags TEXT,
+      is_deleted INTEGER NOT NULL DEFAULT 0,
+      is_edited INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT,
+      collected_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_messages_ticket_created_at ON messages(ticket_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
+
+    -- Cursor da leitura incremental de cada ticket. last_seen_at e a ultima
+    -- coleta em que o ticket estava em open/pending; closed_at marca que ele
+    -- saiu da listagem e ja teve a busca final.
+    CREATE TABLE IF NOT EXISTS message_sync (
+      ticket_id TEXT PRIMARY KEY,
+      last_ticket_updated_at TEXT,
+      last_message_updated_at TEXT,
+      last_seen_at TEXT,
+      closed_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_message_sync_last_seen_at ON message_sync(last_seen_at);
+
+    -- Uma avaliacao da IA por janela de conversa. content e o JSON devolvido
+    -- pela IA ja mascarado; metrics e system_alerts sao calculados em codigo.
+    -- status BLOQUEADA = a verificacao final achou dado pessoal no payload e
+    -- nada foi enviado (system_alerts registra so o tipo e a quantidade).
+    CREATE TABLE IF NOT EXISTS attendance_analyses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticket_id TEXT NOT NULL,
+      attendant TEXT,
+      queue_name TEXT,
+      company TEXT,
+      window_start TEXT,
+      window_end TEXT,
+      message_count INTEGER NOT NULL DEFAULT 0,
+      metrics TEXT,
+      content TEXT,
+      system_alerts TEXT,
+      status TEXT NOT NULL DEFAULT 'CONCLUIDA' CHECK (status IN ('CONCLUIDA', 'BLOQUEADA')),
+      prompt_version TEXT,
+      model TEXT,
+      prompt_tokens INTEGER,
+      completion_tokens INTEGER,
+      total_tokens INTEGER,
+      "trigger" TEXT NOT NULL CHECK ("trigger" IN ('AUTOMATICA', 'MANUAL')),
+      created_by TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_attendance_analyses_created_at ON attendance_analyses(created_at);
+    CREATE INDEX IF NOT EXISTS idx_attendance_analyses_ticket_created_at ON attendance_analyses(ticket_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_attendance_analyses_attendant ON attendance_analyses(attendant);
+
+    -- Prompts cadastrados valem para o resumo gerencial (RESUMO, como antes) ou
+    -- para a analise de atendimento (ATENDIMENTO).
+    ALTER TABLE ai_prompts ADD COLUMN scope TEXT NOT NULL DEFAULT 'RESUMO' CHECK (scope IN ('RESUMO', 'ATENDIMENTO'));
   `
 };
 

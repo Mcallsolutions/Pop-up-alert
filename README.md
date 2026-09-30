@@ -3,7 +3,9 @@
 Monitor de TAG e de inatividade dos tickets do MTalk. O servidor le os tickets **somente pela API oficial do MTalk**, grava os snapshots em um banco local e alimenta:
 
 - um **painel web** com relatorios, inatividade e resumos de IA;
-- uma **extensao Chrome** que mostra o pop-up de alertas na tela de tickets do MTalk.
+- uma **extensao Chrome** que mostra o pop-up de alertas na tela de tickets do MTalk;
+- opcionalmente, a **analise de atendimento por IA**, que le as conversas com os dados pessoais mascarados. Ela vem
+  **desligada** — veja [Analise de atendimento (IA)](#analise-de-atendimento-ia).
 
 O **painel** e de administracao e entra com **usuario e senha** — veja [Login do painel](#login-do-painel). A
 **extensao** identifica cada atendente por um **token por pessoa**: cada um recebe os proprios alertas (e todos os
@@ -48,6 +50,7 @@ npm start           # API sem --watch
 npm run migrate     # cria/atualiza o banco e sai
 npm run admin       # cria usuarios do painel e troca senhas
 npm run token       # emite, lista e revoga os tokens da extensao
+npm test            # testes (node:test): mascaramento, metricas, mensagens e integracao com MTalk/OpenAI falsos
 ```
 
 ### Credenciais do MTalk
@@ -285,6 +288,16 @@ IA (so ADMIN):
 - `GET /api/ai/summary/latest`
 - `GET /api/ai/summaries?limit=10`
 
+Analise de atendimento (so painel; o token da extensao recebe `401` mesmo com perfil ADMIN):
+
+- `GET /api/attendance/status` — se esta ligada, orcamento usado na hora, mensagens no banco, ultima leitura e erro
+- `GET /api/attendance/analyses` — lista com os totais dos cards; filtros `day`, `startDate`, `endDate`,
+  `attendant`, `queue`, `company`, `clientName`, `riscoCancelamento`, `sentimentoCliente`, `notaMax` e `limit`
+- `GET /api/attendance/analyses/:id` — a analise mais a transcricao **mascarada** da janela, com as evidencias marcadas
+- `GET /api/attendance/by-attendant` — nota media, % de sentimento negativo, 1a resposta media, riscos altos e orgao externo
+- `POST /api/attendance/tickets/:ticketId/analyze` — analise manual (le as mensagens do ticket antes). Com a
+  analise desligada responde `403`
+
 Diagnostico: `GET /health` (status da API e do banco).
 
 Os endpoints de `/api/reports` aceitam os filtros `day`, `startDate`, `endDate`, `attendant`, `company`, `queue`, `clientName` e `limit`. A busca por texto e parcial; `attendant` tambem casa com o nome canonico (`Alek` encontra `Aleksandro`). Data impossivel (ex.: `2026-09-31`) responde `400`. Os relatorios consideram apenas as filas monitoradas e uma leitura por ticket: os de TAG usam a **mais recente**; os de inatividade (e o `totalInactive` do `summary`), a de **maior parada no periodo** — quem ficou 50 min parado de manha e depois foi atendido continua no relatorio do dia, com o atendente que estava com o ticket naquela hora.
@@ -306,7 +319,10 @@ As listas de tickets so trazem contato com nome; os demais sao contados em `inco
 
 O painel tem uma aba **IA** com tres partes:
 
-1. **Prompts e treinamentos** — instrucoes (`INSTRUCAO`) e exemplos (`TREINAMENTO`). Tudo que estiver **ativo** e enviado junto com os dados a cada resumo.
+1. **Prompts e treinamentos** — instrucoes (`INSTRUCAO`) e exemplos (`TREINAMENTO`), cada um com o seu **uso**
+   (`scope`): `RESUMO` (o resumo gerencial desta aba, como sempre foi) ou `ATENDIMENTO` (a
+   [analise de cada conversa](#analise-de-atendimento-ia)). Tudo que estiver **ativo** vai junto com os dados, e cada
+   uso so recebe os seus. Os prompts ja cadastrados ficaram como `RESUMO`.
 2. **Resumo da IA** — os filtros da barra definem o recorte enviado ao modelo, montado com os mesmos relatorios que o painel exibe.
 3. **Historico** — cada resumo fica salvo com modelo, tokens e filtros. O ultimo tambem aparece no Dashboard.
 
@@ -329,6 +345,108 @@ As listas de ticket enviadas ao modelo sao **amostras** de no maximo 40 linhas, 
 
 Variaveis: `OPENAI_API_KEY` (obrigatoria para gerar), `OPENAI_MODEL` (padrao `gpt-4o-mini`) e as opcionais `OPENAI_BASE_URL`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT`, `OPENAI_TEMPERATURE` (`0.2`), `OPENAI_MAX_OUTPUT_TOKENS` (`2000`), `OPENAI_TIMEOUT_MS` (`25000`). Valor vazio cai no padrao.
 
+## Analise de atendimento (IA)
+
+Avalia cada conversa de atendimento: le as mensagens dos tickets pela API do MTalk, **mascara os dados pessoais antes
+de gravar**, calcula os tempos de resposta em codigo e pede a OpenAI uma avaliacao estruturada (resumo, assunto,
+sentimento do cliente, risco de cancelamento, orgao externo citado, resolvido, nota de 1 a 5, pontos positivos e de
+melhoria, alertas e as mensagens que servem de evidencia). O resultado aparece na pagina **Atendimento IA** do painel,
+com filtros, cards, tabela por atendente, transcricao mascarada e exportacao em PDF/DOCX.
+
+### Como ligar
+
+Vem **desligada**. Com `AI_ATTENDANCE_ANALYSIS=0` (padrao) o sistema faz exatamente o que fazia antes: nenhuma
+chamada a `/messages` e nenhuma tabela nova preenchida. Para ligar, antes de tudo passe pelo
+[checklist de validacao](Mtalk%20integration/README.md#checklist-antes-de-ligar-a-analise-de-atendimento) com um
+ticket de teste; depois:
+
+```bash
+# no .env
+AI_ATTENDANCE_ANALYSIS=1
+OPENAI_API_KEY=...
+```
+
+e reinicie a API. **Configuracoes** mostra se esta ligada, o orcamento usado na hora e a ultima leitura.
+
+| Variavel | Padrao | Para que |
+| --- | --- | --- |
+| `AI_ATTENDANCE_ANALYSIS` | `0` | `1` liga a leitura das mensagens e a analise |
+| `MTALK_MAX_MESSAGE_FETCHES` | `20` | teto de `GET /messages/{ticketId}` por coleta (`0` para de ler mensagens novas) |
+| `MESSAGE_RETENTION_DAYS` | `30` | dias que as mensagens mascaradas ficam no banco (`0` nao desliga: vale o padrao) |
+| `AI_ANALYSIS_IDLE_MINUTES` | `20` | minutos de conversa parada para ela entrar na fila (ticket fechado entra na hora) |
+| `AI_ANALYSIS_MIN_MESSAGES` | `4` | minimo de mensagens novas, com 1+ do cliente e 1+ humana da empresa |
+| `AI_ANALYSIS_MAX_MESSAGES` | `80` | maximo de mensagens por analise; passando disso ficam as mais recentes (`truncada`) |
+| `AI_ANALYSIS_MAX_PER_HOUR` | `30` | teto de chamadas a OpenAI por hora (`0` pausa a analise automatica) |
+| `AI_ANALYSIS_MODEL` | vazio | modelo so desta analise; vazio usa `OPENAI_MODEL` |
+
+### Como funciona
+
+1. **Leitura incremental**, depois de cada coleta gravada e fora do caminho dos alertas (a coleta nao espera; uma
+   falha aqui nunca derruba a coleta). Primeiro os tickets que sairam de `open`/`pending` (uma busca final, para pegar
+   a despedida), depois os que mudaram, do mais antigo para o mais novo. Com cursor, pede so o que mudou
+   (`minUpdatedAt`). **Nunca** manda `markAsRead`.
+2. **Mascaramento na entrada** (`server/src/services/pii-mask.js`): o texto original nunca e gravado, nem em log.
+3. **Metricas em codigo** (`attendance-metrics.js`): 1a resposta, tempo medio de resposta, maior espera do cliente
+   (contada do INICIO de cada bloco de mensagens dele ate a proxima resposta humana; mensagem automatica nao conta),
+   espera da empresa pelo cliente, duracao e transferencia. Alertas do sistema: `CLIENTE_AGUARDANDO` (espera acima de
+   `INACTIVITY_THRESHOLD_MINUTES`), `CANCELAMENTO` e `ORGAO_EXTERNO` (palavras do cliente, sem IA).
+4. **Analise**: automatica no maximo a cada 5 minutos, para conversa com mensagem nova desde a ultima analise e
+   parada ha `AI_ANALYSIS_IDLE_MINUTES` (ou ticket fechado); ou manual, pelo botao **Analisar de novo**.
+
+Quem escreveu cada mensagem: `CLIENTE` (`fromMe=false`), `ATENDENTE` (com assinatura `*Nome:*` ou `userId`),
+`AUTOMATICA` (a empresa escreveu enquanto o ticket estava sem atendente: bot, fila, saudacao) e `EMPRESA` (a empresa
+escreveu, mas nao da para saber se foi pessoa ou automatico — a IA e avisada). O atendente de cada mensagem vem da
+leitura de tickets mais proxima **antes** dela: uma transferencia nao joga a conversa inteira em quem pegou depois.
+
+### O que vai para a OpenAI
+
+Por minimizacao, so a fila, as metricas e as mensagens mascaradas, com ids curtos (`m1`, `m2`...) e minutos desde a
+primeira mensagem. **Nao vai** nome de cliente, de atendente ou de empresa, nem horario absoluto. Logo antes do envio,
+`assertNoPii()` confere o payload inteiro: se sobrar qualquer dado pessoal, **nada e enviado**, a analise fica
+`BLOQUEADA` e o registro guarda so o tipo e a quantidade. Os textos que a IA devolve passam pelo mascaramento de novo
+antes de gravar, e evidencia citada com id fora da conversa e descartada.
+
+### Marcadores
+
+| Marcador | O que substitui |
+| --- | --- |
+| `[CPF]`, `[CNPJ]` (inclusive o alfanumerico), `[RG]`, `[DATA_NASCIMENTO]` | documentos e nascimento |
+| `[ENDERECO]`, `[CEP]`, `[LOCALIZACAO]` | logradouro, numero, complemento e bairro; CEP; mapa e coordenadas (cidade e estado ficam) |
+| `[TELEFONE]`, `[EMAIL]` | contato |
+| `[CARTAO]`, `[CONTA_BANCARIA]`, `[CHAVE_PIX]` | dados financeiros |
+| `[SENHA]` | senha, login e PPPoE |
+| `[IP]`, `[EQUIPAMENTO]` | IP publico e IPv6; MAC e serial de ONU (IP privado como `192.168.0.1` fica) |
+| `[CLIENTE]`, `[ATENDENTE]` | nome do contato e dos atendentes |
+| `[NUMERO]` | qualquer sequencia de 8+ digitos que sobrou |
+| `[CONTATO]` | vCard compartilhado (descartado inteiro) |
+| `[AUDIO]`, `[IMAGEM]`, `[VIDEO]`, `[DOCUMENTO]`, `[FIGURINHA]` | anexos (a legenda de imagem e video e mascarada; nome de arquivo e descartado) |
+
+Regra geral: **na duvida, mascara**. O digito verificador so escolhe o rotulo (`[CPF]`, `[TELEFONE]` ou `[NUMERO]`),
+nunca decide se o numero sai.
+
+### Custos e travas
+
+- MTalk: ate `MTALK_MAX_MESSAGE_FETCHES` GETs por coleta, contados em `requisicoesPorEndpoint` no diagnostico; a
+  leitura tem trava propria (se a anterior ainda roda, pula).
+- OpenAI: ate `AI_ANALYSIS_MAX_PER_HOUR` chamadas por hora na analise automatica. A manual conta no orcamento, mas nao
+  e barrada por ele. Chamada que falhou tambem conta; o ticket espera 30 minutos antes de tentar de novo.
+- Cada analise leva um prompt de sistema de ~1.300 tokens mais a conversa (ate 80 mensagens) e devolve algumas
+  centenas de tokens. Com o teto padrao, sao no maximo 30 analises por hora; o custo em dinheiro depende do preco do
+  modelo na OpenAI. Os tokens de cada analise aparecem no detalhe em **Atendimento IA**.
+
+### O que ainda escapa
+
+- **Nomes de terceiros** citados no texto ("fala com o Pedro do financeiro"): so o nome do contato e o dos
+  atendentes sao conhecidos.
+- Dado pessoal escrito de um jeito que nenhum detector reconhece (endereco sem palavra-chave, senha sem "senha"
+  perto). O `assertNoPii` repete os mesmos detectores, entao nao pega o que eles nao reconhecem.
+- O conteudo de audio, imagem e documento nao e lido.
+
+### Proximos passos
+
+- Usar `maiorEsperaClienteMinutos` para corrigir o alerta de inatividade: hoje ele mede **ticket parado** e nao
+  separa "cliente aguardando" de "aguardando o cliente". Com as mensagens, da para alertar so o primeiro caso.
+
 ## Horarios
 
 As tabelas mostram o **horario do ticket**: a ultima movimentacao no MTalk (`updatedAt`, gravado em `last_message_at`), que tambem e a origem do calculo de inatividade. O horario da coleta aparece so em "Ultima atualizacao" e "Ultima coleta".
@@ -341,7 +459,7 @@ O filtro de dia usa o fuso `MONITOR_TIME_ZONE` (padrao `America/Sao_Paulo`).
 
 SQLite em `server/data/monitor.sqlite` (ou `SQLITE_PATH`). As migrations ficam em `server/src/database/index.js` (constante `MIGRATIONS`) e rodam ao subir a API, controladas pela tabela `schema_migrations`. Para adicionar uma, crie uma nova chave — nunca edite uma que ja rodou.
 
-**Retencao:** cada coleta grava de novo todos os tickets em atendimento (uma linha por ticket por minuto), entao as leituras com mais de `RETENTION_DAYS` dias (padrao **90**; `0` guarda tudo) sao apagadas sozinhas — depois de uma coleta, no maximo a cada 6 horas e em lotes, para nao travar a API. O arquivo do SQLite nao encolhe: o espaco liberado e reaproveitado pelas coletas seguintes.
+**Retencao:** cada coleta grava de novo todos os tickets em atendimento (uma linha por ticket por minuto), entao as leituras com mais de `RETENTION_DAYS` dias (padrao **90**; `0` guarda tudo) sao apagadas sozinhas — depois de uma coleta, no maximo a cada 6 horas e em lotes, para nao travar a API. As analises de atendimento seguem o mesmo `RETENTION_DAYS`; as mensagens mascaradas e os cursores de leitura, `MESSAGE_RETENTION_DAYS` (padrao **30**, e aqui `0` nao desliga). O arquivo do SQLite nao encolhe: o espaco liberado e reaproveitado pelas coletas seguintes.
 
 ## Seguranca e LGPD
 
@@ -355,10 +473,33 @@ Na VPS, o que fica exposto e o nginx com TLS ([Hospedando numa VPS](#hospedando-
 do login, a sessao e os tokens viajam em texto e qualquer intermediario passa a ver os tickets. Se todos os
 atendentes ja estao numa mesma rede ou VPN, restringir o nginx por IP tira o painel da internet.
 
-O projeto coleta apenas o necessario para o relatorio: cliente, fila, atendente, conexao, horario, TAGs, status e identificadores do ticket. Ele **nao le o conteudo das mensagens** — nunca chama `GET /backend/messages/{ticketId}` — e nao faz nenhuma escrita no atendimento. O historico de coletas e apagado depois de `RETENTION_DAYS` dias (padrao 90).
+Para os relatorios e alertas, o projeto coleta apenas: cliente, fila, atendente, conexao, horario, TAGs, status e
+identificadores do ticket. Ele nunca faz escrita no atendimento: o cliente HTTP do MTalk so tem `GET`. O historico de
+coletas e apagado depois de `RETENTION_DAYS` dias (padrao 90).
+
+**Conteudo das mensagens.** Com a [analise de atendimento](#analise-de-atendimento-ia) **desligada** (padrao), o
+sistema nao le mensagem nenhuma. **Ligada** (`AI_ATTENDANCE_ANALYSIS=1`), ele passa a ler `GET
+/backend/messages/{ticketId}` — sem `markAsRead`, entao a conversa nao aparece como lida para o atendente — com estas
+camadas de protecao:
+
+1. **mascaramento na entrada**: o texto e mascarado antes de tocar o banco e so a versao mascarada e gravada; o
+   original nunca vai para log, erro ou resposta da API. Localizacao e vCard sao descartados inteiros, anexo e nome de
+   arquivo tambem. Se o mascaramento falhar, grava `[MENSAGEM_OCULTA]`, nunca o texto cru;
+2. **verificacao antes do envio**: `assertNoPii()` confere o payload inteiro; se algo escapou, nada vai para a OpenAI;
+3. **minimizacao**: a OpenAI nao recebe nome de cliente, de atendente ou de empresa, nem horario absoluto; o que ela
+   devolve e mascarado de novo antes de gravar;
+4. **retencao curta**: mensagens mascaradas saem em `MESSAGE_RETENTION_DAYS` (padrao **30**) dias; as analises, em
+   `RETENTION_DAYS`;
+5. **acesso so de administrador**: mensagens e analises so saem pelas rotas do painel (login com usuario e senha); o
+   token da extensao nunca as le.
+
+O banco guarda so a **contagem** do que foi mascarado em cada mensagem (`{"CPF":1}`), nunca o valor. **O que ainda
+escapa**: nomes de terceiros citados no texto e dado pessoal escrito de um jeito que nenhum detector reconhece — veja
+[O que ainda escapa](#o-que-ainda-escapa).
 
 Os tokens do MTalk e da OpenAI ficam apenas no `.env` local; a API nunca os grava no banco nem os devolve. Os tokens
 da extensao e as sessoes do painel ficam no banco **so como SHA-256**, e as senhas do painel como hash scrypt — nada
 disso pode ser reconstituido a partir do banco.
 
-Atencao ao usar a aba **IA**: gerar um resumo envia para a OpenAI o recorte filtrado, incluindo nomes de clientes, atendentes e empresas.
+Atencao ao usar a aba **IA**: gerar um **resumo gerencial** envia para a OpenAI o recorte filtrado, incluindo nomes de
+clientes, atendentes e empresas. A analise de atendimento, ao contrario, nunca envia esses nomes.

@@ -11,6 +11,7 @@ export default function SettingsPage() {
   const [mtalk, setMtalk] = useState(null);
   const [mtalkError, setMtalkError] = useState("");
   const [collecting, setCollecting] = useState(false);
+  const [attendance, setAttendance] = useState(null);
 
   async function loadStatus() {
     try {
@@ -19,6 +20,11 @@ export default function SettingsPage() {
     } catch (error) {
       setMtalkError(error.message);
     }
+    // Status da analise de atendimento: falha aqui nao esconde o do MTalk.
+    api
+      .attendanceStatus()
+      .then(setAttendance)
+      .catch(() => setAttendance(null));
   }
 
   useEffect(() => {
@@ -139,6 +145,8 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      <AttendanceStatus status={attendance} />
+
       <ExtensionDownload />
 
       <TokenManager />
@@ -162,5 +170,73 @@ export default function SettingsPage() {
         </button>
       </form>
     </section>
+  );
+}
+
+// Analise de atendimento por IA: desligada por padrao (AI_ATTENDANCE_ANALYSIS).
+function AttendanceStatus({ status }) {
+  if (!status) {
+    return null;
+  }
+
+  const leitura = status.leitura?.ultima;
+  const automatica = status.analiseAutomatica?.ultima;
+  const config = status.config || {};
+
+  return (
+    <div className="table-panel">
+      <h3>Analise de atendimento (IA)</h3>
+      <div className="table-scroll">
+        <table>
+          <tbody>
+            <tr>
+              <td>Situacao</td>
+              <td>
+                <span className={`badge${status.ligada ? " ativo" : ""}`}>
+                  {status.ligada ? "ligada" : "desligada (AI_ATTENDANCE_ANALYSIS=0)"}
+                </span>
+                {status.ligada && !status.openaiConfigurado ? " — OPENAI_API_KEY nao configurada" : ""}
+              </td>
+            </tr>
+            <tr>
+              <td>Orcamento da hora</td>
+              <td>
+                {status.orcamentoHora?.usadas ?? 0} de {status.orcamentoHora?.limite ?? 0} analises (modelo {status.modelo})
+              </td>
+            </tr>
+            <tr>
+              <td>Mensagens mascaradas no banco</td>
+              <td>
+                {status.mensagensNoBanco} em {status.ticketsAcompanhados} ticket(s) acompanhados — retencao de{" "}
+                {config.retencaoMensagensDias} dias
+              </td>
+            </tr>
+            <tr>
+              <td>Ultima leitura de mensagens</td>
+              <td>
+                {leitura?.fim
+                  ? `${formatDateTime(leitura.fim)} — ${leitura.ok ? "ok" : `falhou: ${leitura.erro}`}, ${leitura.requisicoes} requisicao(oes), ${leitura.mensagensGravadas} mensagem(ns)`
+                  : "-"}
+              </td>
+            </tr>
+            <tr>
+              <td>Ultima rodada automatica</td>
+              <td>
+                {automatica?.fim
+                  ? `${formatDateTime(automatica.fim)} — ${automatica.analisadas} analisada(s), ${automatica.bloqueadas} bloqueada(s), ${automatica.erros} erro(s)${automatica.semOrcamento ? ", orcamento da hora esgotado" : ""}${automatica.erro ? ` (${automatica.erro})` : ""}`
+                  : "-"}
+              </td>
+            </tr>
+            <tr>
+              <td>Travas</td>
+              <td>
+                ate {config.maxLeiturasPorColeta} leitura(s) por coleta; analisa conversa parada ha {config.minutosParado} min ou
+                fechada, com {config.minMensagens} a {config.maxMensagens} mensagens
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

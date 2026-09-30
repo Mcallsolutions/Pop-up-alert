@@ -12,6 +12,7 @@ const authRoutes = require("./routes/auth.routes");
 const mtalkRoutes = require("./routes/mtalk.routes");
 const reportRoutes = require("./routes/reports.routes");
 const aiRoutes = require("./routes/ai.routes");
+const attendanceRoutes = require("./routes/attendance.routes");
 const extensionRoutes = require("./routes/extension.routes");
 
 // Painel em dev (Vite) e a extensao Chrome. Separe por virgula para liberar mais.
@@ -64,6 +65,8 @@ app.use("/api/auth", requireDatabase, authRoutes);
 app.use("/api/mtalk", requireDatabase, authenticate, mtalkRoutes);
 app.use("/api/reports", requireDatabase, authenticatePanel, reportRoutes);
 app.use("/api/ai", requireDatabase, authenticatePanel, aiRoutes);
+// Analise de atendimento por IA: mensagens mascaradas e avaliacoes. So painel.
+app.use("/api/attendance", requireDatabase, authenticatePanel, attendanceRoutes);
 // Download do .zip da extensao, pelo painel. O pacote sai da pasta
 // /extension, sem token nem .env dentro.
 app.use("/api/extension", requireDatabase, authenticatePanel, extensionRoutes);

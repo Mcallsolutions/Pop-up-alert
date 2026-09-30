@@ -10,13 +10,17 @@
 //     1 vez a cada MTALK_TAG_CACHE_MINUTES (padrao 10 min);
 //   - GET /contacts/{id} so para ticket que continuaria no alerta de TAG e cujo
 //     contato veio sem o campo de TAGs, com cache por contato e no maximo
-//     MTALK_MAX_CONTACT_LOOKUPS consultas novas por coleta.
+//     MTALK_MAX_CONTACT_LOOKUPS consultas novas por coleta;
+//   - GET /messages/{ticketId} so com AI_ATTENDANCE_ANALYSIS=1, depois da
+//     coleta gravada e sem atrasar os alertas, com no maximo
+//     MTALK_MAX_MESSAGE_FETCHES chamadas por coleta (mtalk.message-sync.js).
 // A autenticacao (URL + token) fica em mtalk.client.js.
 
 const { MAX_TICKETS_PER_SNAPSHOT, getInactivityThresholdMinutes, getMtalkConfig } = require("../../config/monitoring");
 const { normalizeAttendantName } = require("../attendant-filter");
 const { getAllowedQueues, normalizeQueueName } = require("../queue-filter");
 const { purgeOldReadingsIfDue } = require("../retention.service");
+const { startAttendanceWork } = require("../attendance-analysis.service");
 const { saveSnapshot } = require("../ticket.service");
 const { toZonedIso } = require("../time-zone");
 const { describeSession, getContact, listQueues, listTags, listTickets } = require("./mtalk.client");
@@ -104,6 +108,9 @@ async function collectFromMtalk({ persist = true } = {}) {
     purgeOldReadingsIfDue(now).catch((error) => {
       console.warn("[DB] Falha ao apagar leituras antigas:", error.message);
     });
+    // Leitura das mensagens e analise por IA: desligadas por padrao, com trava
+    // e teto proprios, e nunca aguardadas aqui.
+    startAttendanceWork({ tickets, collectedAt, now, diagnostics });
   }
 
   lastCollection = { collectedAt, thresholdMinutes: threshold, totals, diagnostics, tickets };

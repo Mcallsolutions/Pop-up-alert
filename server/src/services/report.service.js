@@ -362,31 +362,7 @@ function buildTicketFilters(filters = {}) {
   conditions.push(`+queue_name IN (${allowedQueues.map(() => "?").join(", ")})`);
   params.push(...allowedQueues);
 
-  // collected_at e gravado na hora local da operacao com o offset
-  // ("2026-09-15T21:40:05-03:00"), e os limites vao no mesmo formato sem o
-  // offset: a leitura das 00:00:00 em ponto fica "maior" que o limite so pelo
-  // offset e cai no dia certo. Comparar a coluna crua — e nao
-  // substr(collected_at, ...) — e o que deixa o SQLite usar o indice de data.
-  const day = normalizeDateOnly(filters.day);
-  if (day) {
-    const inicio = checkedDateTime(`${day}T00:00:00`);
-    conditions.push("collected_at >= ?", "collected_at < ?");
-    params.push(inicio, shiftDateTime(inicio, DAY_MS));
-  }
-
-  const startDate = normalizeDateTimeFilter(filters.startDate, "start");
-  if (!day && startDate) {
-    conditions.push("collected_at >= ?");
-    params.push(checkedDateTime(startDate));
-  }
-
-  // O fim inclui o segundo informado inteiro: tudo antes do segundo seguinte.
-  const endDate = normalizeDateTimeFilter(filters.endDate, "end");
-  if (!day && endDate) {
-    conditions.push("collected_at < ?");
-    params.push(shiftDateTime(checkedDateTime(endDate), 1000));
-  }
-
+  appendDateRange(conditions, params, "collected_at", filters);
   addAttendantFilter(conditions, params, filters.attendant);
   addLikeFilter(conditions, params, "queue_name", filters.queue);
   addNormalizedLikeFilter(conditions, params, "company", filters.company);
@@ -408,6 +384,36 @@ function buildTicketFilters(filters = {}) {
     // Consultas de inatividade: a leitura de maior parada de cada ticket.
     peakSql: buildPeakInactivitySql(baseWhere, scope.sql)
   };
+}
+
+// Filtro de dia/intervalo sobre uma coluna gravada com toZonedIso. Tambem usado
+// pela analise de atendimento (attendance_analyses.created_at).
+//
+// A coluna e gravada na hora local da operacao com o offset
+// ("2026-09-15T21:40:05-03:00"), e os limites vao no mesmo formato sem o
+// offset: a leitura das 00:00:00 em ponto fica "maior" que o limite so pelo
+// offset e cai no dia certo. Comparar a coluna crua — e nao
+// substr(coluna, ...) — e o que deixa o SQLite usar o indice de data.
+function appendDateRange(conditions, params, column, filters = {}) {
+  const day = normalizeDateOnly(filters.day);
+  if (day) {
+    const inicio = checkedDateTime(`${day}T00:00:00`);
+    conditions.push(`${column} >= ?`, `${column} < ?`);
+    params.push(inicio, shiftDateTime(inicio, DAY_MS));
+  }
+
+  const startDate = normalizeDateTimeFilter(filters.startDate, "start");
+  if (!day && startDate) {
+    conditions.push(`${column} >= ?`);
+    params.push(checkedDateTime(startDate));
+  }
+
+  // O fim inclui o segundo informado inteiro: tudo antes do segundo seguinte.
+  const endDate = normalizeDateTimeFilter(filters.endDate, "end");
+  if (!day && endDate) {
+    conditions.push(`${column} < ?`);
+    params.push(shiftDateTime(checkedDateTime(endDate), 1000));
+  }
 }
 
 // Recorte do token de atendente: os tickets dele mais TODOS os que estao sem
@@ -439,14 +445,14 @@ function addLikeFilter(conditions, params, column, value) {
 
 // O atendente ja e gravado normalizado ("Alek" vira "Aleksandro"), entao a
 // busca tenta o texto digitado e tambem o nome canonico dele.
-function addAttendantFilter(conditions, params, value) {
+function addAttendantFilter(conditions, params, value, column = "attendant") {
   const cleanValue = String(value || "").trim();
   if (!cleanValue) {
     return;
   }
 
   const normalized = normalizeAttendantName(cleanValue) || cleanValue;
-  conditions.push("(UPPER(attendant) LIKE UPPER(?) OR UPPER(attendant) LIKE UPPER(?))");
+  conditions.push(`(UPPER(${column}) LIKE UPPER(?) OR UPPER(${column}) LIKE UPPER(?))`);
   params.push(`%${cleanValue}%`, `%${normalized}%`);
 }
 
@@ -558,6 +564,10 @@ function withInactivityStats(row) {
 }
 
 module.exports = {
+  addAttendantFilter,
+  addLikeFilter,
+  addNormalizedLikeFilter,
+  appendDateRange,
   getSummary,
   getFilterOptions,
   getMissingTags,

@@ -8,13 +8,17 @@
 //
 // Leituras usadas pelo monitor, no mesmo formato do painel do MTalk
 // (levantamento em "Mtalk integration/mtalk-api-endpoints.md"):
-//   GET /tickets        -> tickets em atendimento ("open") e aguardando ("pending")
-//   GET /queue          -> ids das filas monitoradas, para o filtro queueIds
-//   GET /tags/list      -> catalogo de TAGs, quando um vinculo chega sem nome
-//   GET /contacts/{id}  -> TAGs do cliente, quando a listagem nao as traz
-// Ficam de fora de proposito: GET /messages/{ticketId} (o painel chama com
-// markAsRead=true, que marca a conversa como lida para o atendente) e todas as
-// rotas de escrita (POST/PUT/DELETE), que atingem o atendimento e o cliente real.
+//   GET /tickets             -> tickets em atendimento ("open") e aguardando ("pending")
+//   GET /queue               -> ids das filas monitoradas, para o filtro queueIds
+//   GET /tags/list           -> catalogo de TAGs, quando um vinculo chega sem nome
+//   GET /contacts/{id}       -> TAGs do cliente, quando a listagem nao as traz
+//   GET /messages/{ticketId} -> mensagens do ticket, SO com a analise de
+//                               atendimento ligada (AI_ATTENDANCE_ANALYSIS=1)
+// O painel do MTalk chama /messages com markAsRead=true, que marca a conversa
+// como lida para o atendente. Aqui esse parametro nao existe: listMessages
+// monta a query so com nextId e minUpdatedAt, e nada que venha de fora entra
+// nela. Ficam de fora de proposito todas as rotas de escrita (POST/PUT/DELETE),
+// que atingem o atendimento e o cliente real.
 //
 // Este modulo so fala HTTP: nao normaliza nem filtra nada. A traducao para o
 // formato interno fica em mtalk.mapper.js.
@@ -73,6 +77,49 @@ async function getContact({ config = getMtalkConfig(), contactId } = {}) {
   return requestMtalk(`/contacts/${encodeURIComponent(id)}`, { config });
 }
 
+// GET /backend/messages/{ticketId} -> { count, messages[], ticket, hasMore, nextId }
+//   nextId       -> pagina para tras (mensagens mais antigas);
+//   minUpdatedAt -> so o que mudou depois dessa data (novas, editadas, apagadas).
+// A assinatura nao aceita markAsRead nem outro parametro livre de proposito:
+// ler a conversa pelo monitor nunca pode zerar o "nao lidas" do atendente.
+async function listMessages({ config = getMtalkConfig(), ticketId, minUpdatedAt, nextId } = {}) {
+  const { path, query } = buildMessagesRequest({ ticketId, minUpdatedAt, nextId });
+  const data = await requestMtalk(path, { config, query });
+
+  return {
+    messages: toArray(data?.messages),
+    count: Number(data?.count || 0),
+    hasMore: Boolean(data?.hasMore),
+    nextId: data?.nextId ?? null
+  };
+}
+
+// Separado para o teste provar que markAsRead nunca entra na URL.
+function buildMessagesRequest({ ticketId, minUpdatedAt, nextId } = {}) {
+  const id = String(ticketId ?? "").trim();
+  if (!/^\d+$/.test(id)) {
+    throw buildError("Identificador de ticket invalido para ler as mensagens.", 400);
+  }
+
+  return {
+    path: `/messages/${encodeURIComponent(id)}`,
+    query: {
+      nextId: nextId === undefined || nextId === null ? "" : String(nextId),
+      minUpdatedAt: minUpdatedAt ? String(minUpdatedAt) : ""
+    }
+  };
+}
+
+function buildMtalkUrl(baseUrl, path, query = {}) {
+  const url = new URL(`${baseUrl}${path}`);
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  return url;
+}
+
 // So GET: este cliente nao tem, de proposito, nenhuma chamada de escrita.
 async function requestMtalk(path, { config = getMtalkConfig(), query = {} } = {}) {
   if (!config.token) {
@@ -82,12 +129,7 @@ async function requestMtalk(path, { config = getMtalkConfig(), query = {} } = {}
     );
   }
 
-  const url = new URL(`${config.baseUrl}${path}`);
-  for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined && value !== null && value !== "") {
-      url.searchParams.set(key, String(value));
-    }
-  }
+  const url = buildMtalkUrl(config.baseUrl, path, query);
 
   let response;
   try {
@@ -165,8 +207,10 @@ function buildError(message, statusCode) {
 }
 
 module.exports = {
+  buildMessagesRequest,
   describeSession,
   getContact,
+  listMessages,
   listQueues,
   listTags,
   listTickets
