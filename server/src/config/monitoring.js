@@ -34,6 +34,9 @@ const DEFAULT_TICKET_STATUSES = ["open", "pending"];
 // A API do MTalk devolve datas em UTC e o painel do MTalk mostra em BRT. O
 // mesmo fuso define o "dia" dos filtros do painel.
 const DEFAULT_TIME_ZONE = "America/Sao_Paulo";
+// Dias de historico de coletas no banco. Cada coleta grava de novo todos os
+// tickets em atendimento, entao sem limite o banco so cresce.
+const DEFAULT_RETENTION_DAYS = 90;
 
 function getInactivityThresholdMinutes() {
   return readPositiveInteger(process.env.INACTIVITY_THRESHOLD_MINUTES, DEFAULT_INACTIVITY_THRESHOLD_MINUTES);
@@ -41,6 +44,11 @@ function getInactivityThresholdMinutes() {
 
 function getTimeZone() {
   return String(process.env.MONITOR_TIME_ZONE || "").trim() || DEFAULT_TIME_ZONE;
+}
+
+// Zero e valido: desliga a limpeza e guarda tudo.
+function getRetentionDays() {
+  return readNonNegativeInteger(process.env.RETENTION_DAYS, DEFAULT_RETENTION_DAYS);
 }
 
 function getMtalkConfig() {
@@ -116,5 +124,6 @@ module.exports = {
   MAX_TICKETS_PER_SNAPSHOT,
   getInactivityThresholdMinutes,
   getMtalkConfig,
+  getRetentionDays,
   getTimeZone
 };

@@ -186,7 +186,8 @@ git clone https://github.com/Mcallsolutions/Pop-up-alert.git /opt/tag-monitor
 sudo cp /opt/tag-monitor/deploy/.env.production.example /opt/tag-monitor/.env
 ```
 
-Preencha `MTALK_TOKEN` e, se for usar a aba IA, `OPENAI_API_KEY`:
+Preencha `MTALK_TOKEN` e, se for usar a aba IA, `OPENAI_API_KEY`. O `MTALK_TOKEN` tem que ser de um usuario de
+**perfil admin** do MTalk: com usuario comum a coleta so enxerga os tickets abertos do proprio dono do token.
 
 ```bash
 sudo nano /opt/tag-monitor/.env
@@ -200,7 +201,7 @@ sudo chown root:tag-monitor /opt/tag-monitor/.env && sudo chmod 640 /opt/tag-mon
 ```
 
 Confira que `HOST=127.0.0.1`, `TRUST_PROXY=1`, `SERVE_ADMIN=0` e `SQLITE_PATH=/var/lib/tag-monitor/monitor.sqlite` estao
-como no modelo.
+como no modelo, e que **nao existe** `EXTENSION_OPEN_MODE` no arquivo (ver passo 13).
 
 ## 9. Dependencias e build do painel
 
@@ -313,9 +314,9 @@ Para trocar a senha depois: `... admins.js senha --login supervisao` (derruba as
 > depender do `.env`, da tambem para passar o caminho na linha de comando:
 > `sudo -u tag-monitor env SQLITE_PATH=/var/lib/tag-monitor/monitor.sqlite node server/src/scripts/admins.js ...`.
 
-Os tokens sao so da extensao. Enquanto nao existe nenhum, as rotas de alertas ficam em **modo aberto**: qualquer um
-que alcance o dominio recebe todos os alertas. Emita os dos atendentes pelo painel, em **Configuracoes > Tokens da
-extensao**, ou por aqui:
+Os tokens sao so da extensao. Enquanto nao existe nenhum, a extensao de todo mundo recebe `401` (e a API avisa no
+log ao subir): o modo aberto so existe com `EXTENSION_OPEN_MODE=1`, que o `.env` de producao nao tem. Emita os dos
+atendentes pelo painel, em **Configuracoes > Tokens da extensao**, ou por aqui:
 
 ```bash
 cd /opt/tag-monitor && sudo -u tag-monitor node server/src/scripts/tokens.js criar --nome "Stephanie" \
@@ -334,8 +335,9 @@ cd /opt/tag-monitor && sudo -u tag-monitor node server/src/scripts/tokens.js lis
 
 ## 14. Backup do banco
 
-O banco e o historico inteiro de coletas. Com WAL ligado, copiar o arquivo com a API rodando produz backup
-incompleto — use o `.backup` do SQLite. Crie o script:
+O banco e o historico de coletas dos ultimos `RETENTION_DAYS` dias (padrao 90; as leituras mais velhas sao apagadas
+sozinhas). Com WAL ligado, copiar o arquivo com a API rodando produz backup incompleto — use o `.backup` do SQLite.
+Crie o script:
 
 ```bash
 sudo nano /usr/local/bin/tag-monitor-backup.sh
@@ -487,7 +489,9 @@ subir a API.
 | `502 Bad Gateway` no dominio | servico fora do ar — veja `journalctl -u tag-monitor -n 50` |
 | `Origem nao permitida pelo CORS: https://...` | o dominio do erro nao esta no `CORS_ORIGINS` do `.env` |
 | Extensao nunca conecta, painel funciona | dominio ausente de `host_permissions` no `manifest.json` |
-| Todo mundo ve todos os tickets | nenhum token criado: API em modo aberto (passo 13) |
+| Todo mundo ve todos os tickets | `EXTENSION_OPEN_MODE=1` no `.env` sem nenhum token criado — tire a variavel (passo 13) |
+| Extensao de todos com `401` logo depois de subir | nenhum token de extensao ativo — emita os tokens (passo 13) |
+| Popup mostra so os tickets de um atendente / poucos tickets abertos | `MTALK_TOKEN` de usuario sem perfil admin (passo 8) |
 | `npm run build` morre com `Killed` | falta memoria — crie swap (passo 9) |
 | `Cannot find module 'node:sqlite'` | Node menor que 22.5 (passo 5) |
 | Banco aparece em `/opt/tag-monitor/server/data` | o processo nao leu o `.env` — confira dono e permissao do arquivo |

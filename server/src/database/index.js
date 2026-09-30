@@ -250,6 +250,12 @@ const MIGRATIONS = {
     );
 
     CREATE INDEX IF NOT EXISTS idx_admin_sessions_user_id ON admin_sessions(user_id);
+  `,
+  "004_tickets_snapshot_index.sql": `
+    -- A retencao (services/retention.service.js) apaga snapshots antigos, e o
+    -- ON DELETE CASCADE procura as leituras de cada um por snapshot_id. Sem este
+    -- indice, cada snapshot apagado varreria a tabela tickets inteira.
+    CREATE INDEX IF NOT EXISTS idx_tickets_snapshot_id ON tickets(snapshot_id);
   `
 };
 

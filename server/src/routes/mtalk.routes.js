@@ -1,5 +1,6 @@
 const express = require("express");
 const {
+  collectForAttendant,
   describeCollectorStatus,
   getCurrentAlerts,
   runCollection
@@ -19,8 +20,15 @@ router.get("/status", (req, res) => {
 });
 
 // Dispara uma coleta agora. dryRun=1 le a API e devolve o resultado sem gravar.
+// Token de atendente nao tem dryRun nem diagnostico: ve so o proprio recorte,
+// com intervalo minimo entre coletas (ver collectForAttendant).
 router.post("/collect", async (req, res, next) => {
   try {
+    if (!req.auth?.isAdmin) {
+      res.json(await collectForAttendant(req.auth?.scopeAttendant || null));
+      return;
+    }
+
     const persist = String(req.query.dryRun || "") !== "1";
     const result = await runCollection({ persist, reason: persist ? "manual" : "manual-dry-run" });
 

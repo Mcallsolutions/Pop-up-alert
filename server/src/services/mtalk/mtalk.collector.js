@@ -16,6 +16,7 @@
 const { MAX_TICKETS_PER_SNAPSHOT, getInactivityThresholdMinutes, getMtalkConfig } = require("../../config/monitoring");
 const { normalizeAttendantName } = require("../attendant-filter");
 const { getAllowedQueues, normalizeQueueName } = require("../queue-filter");
+const { purgeOldReadingsIfDue } = require("../retention.service");
 const { saveSnapshot } = require("../ticket.service");
 const { toZonedIso } = require("../time-zone");
 const { describeSession, getContact, listQueues, listTags, listTickets } = require("./mtalk.client");
@@ -33,12 +34,12 @@ const {
 // vem de todas as filas informadas em queueIds.
 const STATUSES_WITHOUT_SHOW_ALL = new Set(["pending"]);
 const MAX_ALERT_ITEMS = 6;
+const ATTENDANT_COLLECT_COOLDOWN_MS = 30 * 1000;
 
 let queueCache = { ids: [], expiresAt: 0, resolvedNames: [] };
 let tagCatalogCache = { catalog: EMPTY_CATALOG, expiresAt: 0 };
 // contactId -> { values, expiresAt }: TAGs lidas de GET /contacts/{id}.
 const contactTagCache = new Map();
-let useShowAll = true;
 
 // Estado do agendamento e da ultima leitura bem-sucedida.
 let schedulerTimer = null;
@@ -97,6 +98,14 @@ async function collectFromMtalk({ persist = true } = {}) {
     ? await saveSnapshot({ source: "mtalk-api", url: `${config.panelUrl}/tickets`, collectedAt, tickets })
     : null;
 
+  // Fora do caminho da coleta: a limpeza tem trava propria de horario e uma
+  // falha nela nunca derruba os alertas.
+  if (saved) {
+    purgeOldReadingsIfDue(now).catch((error) => {
+      console.warn("[DB] Falha ao apagar leituras antigas:", error.message);
+    });
+  }
+
   lastCollection = { collectedAt, thresholdMinutes: threshold, totals, diagnostics, tickets };
 
   return {
@@ -131,6 +140,28 @@ function runCollection({ persist = true, reason = "agendada" } = {}) {
     });
 
   return runningCollection;
+}
+
+// "Coletar agora" pedido pela extensao de um atendente. Duas travas que o painel
+// nao tem: se a ultima coleta terminou ha menos de ATTENDANT_COLLECT_COOLDOWN_MS,
+// reaproveita a leitura em vez de chamar o MTalk de novo — o botao de cada popup
+// nao pode virar uma rajada de coletas —, e a resposta traz so os totais do
+// recorte dele: os numeros da operacao inteira e o diagnostico sao do ADMIN
+// (mesma regra de describeCollectorStatus).
+async function collectForAttendant(attendant) {
+  const reaproveitada = Date.now() - Date.parse(lastRun.finishedAt || "") < ATTENDANT_COLLECT_COOLDOWN_MS;
+
+  if (!reaproveitada) {
+    await runCollection({ reason: "manual-atendente" });
+  } else if (lastRun.ok === false) {
+    const error = new Error(lastRun.error);
+    error.statusCode = 502;
+    error.publicMessage = lastRun.error;
+    throw error;
+  }
+
+  const alerts = getCurrentAlerts({ attendant });
+  return { ok: true, reaproveitada, coletadoEm: alerts.collectedAt, ...alerts.totals };
 }
 
 function startCollector() {
@@ -270,7 +301,7 @@ async function resolveMonitoredQueues({ config, requests }) {
   } catch (error) {
     requests.queues += 1;
     // Sessao recusada e credencial ausente derrubam a coleta inteira.
-    if (error.statusCode === 401 || error.statusCode === 503) {
+    if (error.sessionRejected || error.statusCode === 503) {
       throw error;
     }
     // Sem a lista de filas a coleta continua: o filtro por nome no mapper faz
@@ -410,29 +441,17 @@ async function fetchMonitoredTickets({ config, queueIds, requests }) {
   return collected;
 }
 
-// showAll so vai onde o painel do MTalk tambem manda (fora da aba de pendentes)
-// e so e aceito para perfis administrativos: quando o MTalk recusa, a coleta
-// segue sem ele e le as filas as quais o usuario pertence. Sessao recusada e
-// falha de rede nao dizem nada sobre o showAll, entao nao o desligam.
+// showAll so vai onde o painel do MTalk tambem manda (fora da aba de pendentes).
+// E ele que traz os tickets abertos de TODOS os atendentes: sem ele, o MTalk
+// (Ticketz) devolve em "open" so os tickets do dono do MTALK_TOKEN. Por isso nao
+// existe "seguir sem showAll": antes, um 500 ou 429 passageiro desligava o
+// showAll ate reiniciar a API e o monitor perdia em silencio os tickets dos
+// outros atendentes. Agora o erro derruba a coleta (aparece no painel e no
+// popup) e a proxima tenta de novo. O MTalk tambem nao recusa showAll de usuario
+// comum — so ignora —, entao o token precisa ser de perfil admin.
 async function fetchTicketPage({ config, status, pageNumber, queueIds, requests }) {
-  if (useShowAll && !STATUSES_WITHOUT_SHOW_ALL.has(status)) {
-    try {
-      const page = await listTickets({ config, status, pageNumber, queueIds, showAll: true });
-      requests.tickets += 1;
-      return page;
-    } catch (error) {
-      requests.tickets += 1;
-      if (error.statusCode === 401 || error.statusCode === 503 || error.noResponse) {
-        throw error;
-      }
-      useShowAll = false;
-      console.warn("[MTalk] showAll recusado pela API, seguindo apenas com as filas do usuario:", error.message);
-    }
-  }
-
-  const page = await listTickets({ config, status, pageNumber, queueIds, showAll: false });
   requests.tickets += 1;
-  return page;
+  return listTickets({ config, status, pageNumber, queueIds, showAll: !STATUSES_WITHOUT_SHOW_ALL.has(status) });
 }
 
 function describeCollectorStatus({ isAdmin = true } = {}) {
@@ -476,6 +495,7 @@ function describeCollectorStatus({ isAdmin = true } = {}) {
 }
 
 module.exports = {
+  collectForAttendant,
   describeCollectorStatus,
   getCurrentAlerts,
   runCollection,

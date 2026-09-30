@@ -109,10 +109,17 @@ async function requestMtalk(path, { config = getMtalkConfig(), query = {} } = {}
 
   if (!response.ok) {
     const message = describeHttpFailure(response, url);
+    // Token recusado pelo MTalk sai da NOSSA API como 502, nunca 401: para o
+    // painel e para a extensao, 401 quer dizer "a sua sessao / o seu token" — o
+    // painel derrubava o login do administrador e a extensao pedia o token do
+    // atendente quando quem tinha vencido era o MTALK_TOKEN. O coletor olha
+    // sessionRejected para parar a coleta.
+    const failure = buildError(message, 502);
     if (isSessionRejected(response.status)) {
       session.lastError = message;
+      failure.sessionRejected = true;
     }
-    throw buildError(message, isSessionRejected(response.status) ? 401 : 502);
+    throw failure;
   }
 
   session = { lastSuccessAt: new Date().toISOString(), lastError: "" };

@@ -6,8 +6,10 @@
 // - token por pessoa (mca_...), usado so pela extensao (pop-up) para saber de
 //   quem sao os alertas.
 //
-// Enquanto nao existe token de extensao ativo, as rotas da extensao rodam em
-// MODO ABERTO (todo mundo ve tudo). O painel nunca fica aberto: sem login, 401.
+// Com EXTENSION_OPEN_MODE=1 (so em desenvolvimento) e nenhum token de extensao
+// ativo, as rotas da extensao rodam em MODO ABERTO (todo mundo ve tudo). Sem a
+// variavel, nenhum token ativo = 401 para a extensao. O painel nunca fica
+// aberto: sem login, 401.
 
 const { authenticateToken, isOpenMode, openModeIdentity } = require("../services/token.service");
 const { authenticateSession, isSessionToken } = require("../services/admin-auth.service");

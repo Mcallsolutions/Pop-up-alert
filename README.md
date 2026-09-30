@@ -55,7 +55,9 @@ npm run token       # emite, lista e revoga os tokens da extensao
 A autenticacao e por **URL + token**:
 
 - `MTALK_BASE_URL` — backend da instancia, terminando em `/backend` (ex.: `https://s11.mtalk.com.br/backend`);
-- `MTALK_TOKEN` — token Bearer de um usuario com acesso as filas monitoradas. Pode ser colado cru, com `Bearer ` na frente ou entre aspas.
+- `MTALK_TOKEN` — token Bearer de um usuario de **perfil admin** do MTalk. So o admin tem o `showAll` atendido: com
+  usuario comum o MTalk ignora o parametro, sem erro, e a coleta passa a ver apenas os tickets abertos do proprio dono
+  do token. Pode ser colado cru, com `Bearer ` na frente ou entre aspas.
 
 O servidor nao faz login nem renova o token. Quando o MTalk recusar (token expirado ou revogado), a coleta falha e o erro aparece no painel e no popup da extensao: gere um novo token, atualize o `.env` e reinicie a API. O token fica **so no `.env`**, que nao vai para o git — este repositorio e publico.
 
@@ -122,9 +124,14 @@ O `--atendente` e o nome como aparece no MTalk; as variacoes conhecidas sao unif
 
 ### Modo aberto
 
-**Enquanto nao existe nenhum token ativo, as rotas da extensao (`/api/mtalk`) ficam abertas** e todo mundo recebe
-todos os alertas — assim um clone novo sobe com `npm run dev` sem passo extra. **Criar o primeiro token liga a
-exigencia** para todas as extensoes. O modo aberto nunca vale para o painel, que sempre pede login.
+O modo aberto e **so para desenvolvimento**. Com `EXTENSION_OPEN_MODE=1` no `.env` e nenhum token ativo, as rotas da
+extensao (`/api/mtalk`) ficam abertas e todo mundo recebe todos os alertas — assim um clone novo sobe com
+`npm run dev` sem passo extra (o `.env.example` ja traz a variavel ligada). **Criar o primeiro token liga a
+exigencia** para todas as extensoes.
+
+**Sem a variavel — como na VPS —, nao existe modo aberto**: sem nenhum token ativo, toda chamada da extensao recebe
+`401`, e a API avisa no log ao subir. Revogar o ultimo token, portanto, nunca abre os alertas para a internet. O modo
+aberto nunca vale para o painel, que sempre pede login.
 
 ### Onde o atendente cola o token
 
@@ -163,7 +170,8 @@ Como funciona:
   volta. Quem ja estava parado quando o MTalk foi aberto aparece no pop-up, sem bip. O Chrome so libera som depois do
   primeiro clique ou tecla na pagina. Da para desligar no popup ou nas opcoes da extensao;
 - sem coleta recente no servidor (API fora do ar, token do MTalk recusado) o pop-up some, em vez de mostrar alerta velho;
-- no popup, **Coletar agora** pede uma coleta imediata e **Testar API** confere a API local e o token do MTalk.
+- no popup, **Coletar agora** pede uma coleta imediata (com token de atendente, se a ultima terminou ha menos de 30 s,
+  ela e reaproveitada) e **Testar API** confere a API local e o token do MTalk.
 
 ## Hospedando numa VPS (Ubuntu)
 
@@ -198,8 +206,8 @@ quem ainda tiver um deles salvo.
 8. **Firewall**: `sudo ufw allow 22,80,443/tcp && sudo ufw enable`. A porta 3333 nunca e liberada — com
    `HOST=127.0.0.1` ela so existe para o nginx.
 9. **Antes de abrir o dominio**: crie o seu usuario do painel (`npm run admin -- criar ...`) e emita os tokens da
-   extensao — enquanto nao houver token, as rotas da extensao ficam em [modo aberto](#modo-aberto), e na internet isso
-   significa que qualquer um recebe todos os alertas.
+   extensao — enquanto nao houver token, a extensao de todo mundo recebe `401`. Na VPS nao existe
+   [modo aberto](#modo-aberto): nunca coloque `EXTENSION_OPEN_MODE` no `.env` de producao.
 
 Depois disso, atualizar e `./deploy/atualizar.sh` (git pull, build e restart).
 
@@ -232,7 +240,11 @@ uma de duas credenciais:
 
 - **sessao do painel** (`mcs_...`, devolvida pelo login): abre tudo;
 - **token da extensao** (`mca_...`): abre so `/api/mtalk/*` e `/api/auth/me`, e `/api/mtalk/alerts` responde
-  **recortado** pelo token. Sem nenhum token ativo essas rotas ficam em [modo aberto](#modo-aberto).
+  **recortado** pelo token. Sem nenhum token ativo, essas rotas so ficam abertas com `EXTENSION_OPEN_MODE=1`
+  ([modo aberto](#modo-aberto)); sem a variavel, respondem `401`.
+
+Quando o MTalk recusa o `MTALK_TOKEN`, a API responde `502`, e nao `401`: `401` e sempre sobre a credencial de quem
+chamou (sessao do painel ou token da extensao).
 
 Sem credencial valida a resposta e `401` — inclusive token da extensao em rota do painel.
 
@@ -249,7 +261,9 @@ Coleta e alertas:
 - `GET /api/mtalk/alerts` — alertas da ultima coleta, no formato do pop-up. `inactive.items` traz no maximo 6
   tickets; `inactive.assignedTicketIds` traz os ids de **todos** os inativos com atendente, que a extensao usa para o bip
 - `GET /api/mtalk/status` — estado do token do MTalk, agendamento e ultima coleta (sem expor o token)
-- `POST /api/mtalk/collect` — coleta agora; `?dryRun=1` le a API e nao grava
+- `POST /api/mtalk/collect` — coleta agora; `?dryRun=1` le a API e nao grava. Com token de atendente nao ha `dryRun`
+  nem diagnostico: a resposta traz so os totais do recorte dele, e uma coleta que terminou ha menos de 30 s e
+  reaproveitada em vez de chamar o MTalk de novo
 
 Relatorios:
 
@@ -273,7 +287,7 @@ IA (so ADMIN):
 
 Diagnostico: `GET /health` (status da API e do banco).
 
-Os endpoints de `/api/reports` aceitam os filtros `day`, `startDate`, `endDate`, `attendant`, `company`, `queue`, `clientName` e `limit`. A busca por texto e parcial; `attendant` tambem casa com o nome canonico (`Alek` encontra `Aleksandro`). Os relatorios consideram apenas as filas monitoradas e, de cada ticket, so a leitura mais recente.
+Os endpoints de `/api/reports` aceitam os filtros `day`, `startDate`, `endDate`, `attendant`, `company`, `queue`, `clientName` e `limit`. A busca por texto e parcial; `attendant` tambem casa com o nome canonico (`Alek` encontra `Aleksandro`). Data impossivel (ex.: `2026-09-31`) responde `400`. Os relatorios consideram apenas as filas monitoradas e uma leitura por ticket: os de TAG usam a **mais recente**; os de inatividade (e o `totalInactive` do `summary`), a de **maior parada no periodo** — quem ficou 50 min parado de manha e depois foi atendido continua no relatorio do dia, com o atendente que estava com o ticket naquela hora.
 
 ### Tickets aguardando na fila (sem atendente)
 
@@ -319,24 +333,29 @@ Variaveis: `OPENAI_API_KEY` (obrigatoria para gerar), `OPENAI_MODEL` (padrao `gp
 
 As tabelas mostram o **horario do ticket**: a ultima movimentacao no MTalk (`updatedAt`, gravado em `last_message_at`), que tambem e a origem do calculo de inatividade. O horario da coleta aparece so em "Ultima atualizacao" e "Ultima coleta".
 
+Por isso a inatividade mede **ticket parado**, e nao "cliente sem resposta": o `updatedAt` nao diz se quem esta esperando e o cliente ou o atendente. O painel e o prompt da IA usam esse vocabulario de proposito.
+
 O filtro de dia usa o fuso `MONITOR_TIME_ZONE` (padrao `America/Sao_Paulo`).
 
 ## Banco de dados
 
 SQLite em `server/data/monitor.sqlite` (ou `SQLITE_PATH`). As migrations ficam em `server/src/database/index.js` (constante `MIGRATIONS`) e rodam ao subir a API, controladas pela tabela `schema_migrations`. Para adicionar uma, crie uma nova chave — nunca edite uma que ja rodou.
 
+**Retencao:** cada coleta grava de novo todos os tickets em atendimento (uma linha por ticket por minuto), entao as leituras com mais de `RETENTION_DAYS` dias (padrao **90**; `0` guarda tudo) sao apagadas sozinhas — depois de uma coleta, no maximo a cada 6 horas e em lotes, para nao travar a API. O arquivo do SQLite nao encolhe: o espaco liberado e reaproveitado pelas coletas seguintes.
+
 ## Seguranca e LGPD
 
 O painel exige login; o token da extensao separa **o que cada atendente recebe**. A sessao do painel e o token da
 extensao ficam em texto no navegador (`localStorage` do painel, `chrome.storage.local` da extensao): contra quem ja
-tem acesso a maquina, isso nao protege. **Nao exponha a porta 3333 nem a 5173 fora da maquina** — e, se nenhum token
-da extensao foi criado ainda, as rotas de alertas estao abertas para qualquer um que alcance a API.
+tem acesso a maquina, isso nao protege. **Nao exponha a porta 3333 nem a 5173 fora da maquina** — e, com
+`EXTENSION_OPEN_MODE=1` e nenhum token da extensao criado, as rotas de alertas ficam abertas para qualquer um que
+alcance a API.
 
 Na VPS, o que fica exposto e o nginx com TLS ([Hospedando numa VPS](#hospedando-numa-vps-ubuntu)): sem HTTPS a senha
 do login, a sessao e os tokens viajam em texto e qualquer intermediario passa a ver os tickets. Se todos os
 atendentes ja estao numa mesma rede ou VPN, restringir o nginx por IP tira o painel da internet.
 
-O projeto coleta apenas o necessario para o relatorio: cliente, fila, atendente, conexao, horario, TAGs, status e identificadores do ticket. Ele **nao le o conteudo das mensagens** — nunca chama `GET /backend/messages/{ticketId}` — e nao faz nenhuma escrita no atendimento.
+O projeto coleta apenas o necessario para o relatorio: cliente, fila, atendente, conexao, horario, TAGs, status e identificadores do ticket. Ele **nao le o conteudo das mensagens** — nunca chama `GET /backend/messages/{ticketId}` — e nao faz nenhuma escrita no atendimento. O historico de coletas e apagado depois de `RETENTION_DAYS` dias (padrao 90).
 
 Os tokens do MTalk e da OpenAI ficam apenas no `.env` local; a API nunca os grava no banco nem os devolve. Os tokens
 da extensao e as sessoes do painel ficam no banco **so como SHA-256**, e as senhas do painel como hash scrypt — nada

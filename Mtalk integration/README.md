@@ -39,10 +39,15 @@ MTalk (API /backend)  <--  servidor local (coleta a cada 60s)  -->  SQLite
 - O token nunca vai para o banco, para o log ou para `GET /api/mtalk/status`.
 - **Token expirado ou revogado**: o MTalk responde 401/403, a coleta falha, o
   erro aparece em **Configuracoes** do painel e no popup da extensao, e o pop-up
-  some. Gere um novo token, atualize o `.env` e reinicie a API.
-- Use o token de um usuario com acesso as filas monitoradas. Um perfil
-  administrativo aceita `showAll=true` e enxerga os tickets de todos os
-  atendentes; sem ele, a coleta le as filas do proprio usuario.
+  some. Gere um novo token, atualize o `.env` e reinicie a API. A API local
+  repassa esse caso como `502` — nunca `401`, que o painel e a extensao leem
+  como problema da credencial deles.
+- Use o token de um usuario de **perfil admin**. So ele tem o `showAll=true`
+  atendido: com usuario comum o MTalk ignora o parametro (sem erro) e a listagem
+  de `open` volta so com os tickets do proprio dono do token — os pendentes das
+  filas continuam vindo. A coleta sempre manda `showAll` e nao tenta seguir sem
+  ele: um erro nessa chamada derruba a coleta (visivel no painel) e a seguinte
+  tenta de novo.
 
 ## O que o monitor chama — e so isso
 
@@ -123,7 +128,7 @@ mostrar alerta velho.
 
 | Parametro | Onde fica | Valor |
 | --- | --- | --- |
-| Filas | `server/src/services/queue-filter.js` | Suporte-TerraNet, PLANET, MIX, IDEZ, BDG, AIA |
+| Filas | `server/src/services/queue-filter.js` | Suporte-TerraNet, MIX, IDEZ, BDG, AIA |
 | Atendentes | `server/src/services/attendant-filter.js` | tabela de apelidos (`Alek` -> `Aleksandro`) |
 | Empresas | `whatsapp.name` do ticket | conexao do MTalk (ex.: `0800 MIXTEL`) |
 | TAGs | `tags[]` do ticket e `contact.tags[]` do cliente | qualquer TAG vinculada = `COM_TAG` |
@@ -135,7 +140,9 @@ mostrar alerta velho.
 
 SQLite local (`server/data/monitor.sqlite`). Cada coleta grava um snapshot e uma
 linha por ticket; os relatorios usam `external_ticket_id` (o id do ticket no
-MTalk) para ficar so com a leitura mais recente de cada ticket.
+MTalk) para ficar com uma leitura por ticket: a mais recente nos de TAG e a de
+maior parada no periodo nos de inatividade. Leituras com mais de
+`RETENTION_DAYS` dias (padrao 90) sao apagadas sozinhas.
 
 `collected_at` e gravado na hora local da operacao com o offset
 (`2026-09-15T21:40:05-03:00`), para que o filtro de dia do painel seja o dia de

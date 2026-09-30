@@ -66,7 +66,7 @@ const SUMMARY_JSON_SCHEMA = {
 
 const BASE_SYSTEM_PROMPT = [
   "Voce e o analista de operacao de atendimento da Mcall.",
-  "Recebe dados ja consolidados de tickets do MTalk (uso de TAG e tempo sem resposta) e escreve um resumo gerencial em portugues do Brasil.",
+  "Recebe dados ja consolidados de tickets do MTalk (uso de TAG e tempo de ticket parado) e escreve um resumo gerencial em portugues do Brasil.",
   "Regras: use apenas os numeros recebidos, nunca invente nomes, clientes ou metricas; se um dado nao existir, diga que nao ha informacao;",
   "seja objetivo e direto ao ponto, sempre citando os numeros que sustentam cada afirmacao.",
   "",
@@ -76,6 +76,10 @@ const BASE_SYSTEM_PROMPT = [
   "",
   "Sobre atendimento sem responsavel: 'totais.totalWithoutAttendant' sao tickets aguardando na fila, que ninguem assumiu.",
   "Eles nao entram nos numeros de TAG (nao ha a quem cobrar) mas contam na inatividade. Nao os trate como falha de atendente.",
+  "",
+  "Sobre inatividade: os minutos medem quanto tempo o ticket ficou sem nenhuma movimentacao no MTalk (de cada ticket, a maior parada dentro do periodo).",
+  "Esse numero NAO diz quem estava esperando: pode ser o cliente aguardando o atendente ou o atendente aguardando o cliente.",
+  "Fale em 'ticket parado' ou 'sem atividade'; nunca afirme que o atendente deixou o cliente sem resposta.",
   "",
   "Responda SEMPRE com um unico objeto JSON valido, sem texto fora do JSON, seguindo exatamente este formato:",
   JSON.stringify(SUMMARY_SCHEMA, null, 2)
@@ -315,7 +319,8 @@ function buildSample(items, total, extras = {}) {
 }
 
 // O horario que interessa para a IA e o do ticket (display_time), nao o da
-// coleta — mesma leitura que o painel passou a mostrar.
+// coleta — mesma leitura que o painel passou a mostrar. Nos inativos ele marca
+// o inicio da parada.
 function toContextTicket(ticket) {
   return {
     cliente: ticket.clientName || "",
@@ -323,7 +328,7 @@ function toContextTicket(ticket) {
     atendente: ticket.attendant || "",
     empresa: ticket.company || "",
     horarioDoTicket: ticket.displayTime || "",
-    minutosSemResposta: ticket.inactivityMinutes ?? null,
+    minutosParado: ticket.inactivityMinutes ?? null,
     tag: ticket.tag || null
   };
 }

@@ -86,7 +86,11 @@ export default function Dashboard() {
         <Metric label="Tickets com TAG" value={summary?.totalWithTag || 0} />
         <Metric label="Tickets sem TAG" value={summary?.totalWithoutTag || 0} tone="danger" />
         <Metric label="Aguardando atendente" value={summary?.totalWithoutAttendant || 0} />
-        <Metric label="Inativos +15 min" value={summary?.totalInactive || 0} tone="warning" />
+        <Metric
+          label={`Inativos +${summary?.thresholdMinutes || 15} min`}
+          value={summary?.totalInactive || 0}
+          tone="warning"
+        />
         <Metric label="Conformidade" value={`${summary?.compliancePercent || 0}%`} tone="success" />
         <Metric label="Leituras recebidas" value={summary?.totalReadings || 0} />
         <Metric label="Ultima atualizacao" value={formatDateTime(summary?.lastCollectedAt)} compact />

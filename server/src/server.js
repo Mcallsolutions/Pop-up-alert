@@ -3,6 +3,7 @@ require("dotenv").config();
 const app = require("./app");
 const { initializeDatabase } = require("./database");
 const { startCollector, stopCollector } = require("./services/mtalk/mtalk.collector");
+const { countActiveTokens, isOpenModeAllowed } = require("./services/token.service");
 
 const port = Number(process.env.PORT || 3333);
 // Interface onde a API escuta. O padrao continua aberto na rede local, que e
@@ -17,6 +18,7 @@ initializeDatabase()
       console.log(`Mcall Ticket Tag API ouvindo em http://${host}:${port}`);
       console.log(`[DB] SQLite em ${database.filename}`);
       startCollector();
+      warnIfExtensionLocked().catch(() => undefined);
     });
 
     const shutdown = () => {
@@ -34,3 +36,13 @@ initializeDatabase()
     console.error("[API]", error);
     process.exitCode = 1;
   });
+
+// Sem token ativo e sem EXTENSION_OPEN_MODE=1, toda chamada da extensao recebe
+// 401. E o certo na VPS, mas sem este aviso parece defeito.
+async function warnIfExtensionLocked() {
+  if (!isOpenModeAllowed() && !(await countActiveTokens())) {
+    console.warn(
+      "[Auth] Nenhum token de extensao ativo: a extensao recebe 401 ate voce emitir os tokens (painel ou `npm run token -- criar ...`). Para desenvolvimento, EXTENSION_OPEN_MODE=1 libera o modo aberto."
+    );
+  }
+}

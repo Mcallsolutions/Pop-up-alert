@@ -10,9 +10,12 @@
 // O banco guarda apenas o SHA-256 do token. O valor cru existe uma unica vez,
 // na resposta da criacao: perdeu, revoga e emite outro.
 //
-// Enquanto nao houver nenhum token ativo, as rotas da extensao rodam em MODO
-// ABERTO (todo mundo ve tudo), para que um clone novo suba com `npm run dev`
-// sem passo extra. O painel nunca fica aberto. Criar o primeiro token liga a exigencia de token.
+// MODO ABERTO (todo mundo ve tudo) e so para desenvolvimento: vale com
+// EXTENSION_OPEN_MODE=1 no .env e enquanto nao houver nenhum token ativo, para
+// que um clone novo suba com `npm run dev` sem passo extra. Sem a variavel —
+// como na VPS —, nenhum token ativo significa extensao sem acesso: revogar o
+// ultimo token nunca abre os alertas para a internet. O painel nunca fica
+// aberto.
 
 const crypto = require("node:crypto");
 const { getDatabase } = require("../database");
@@ -43,7 +46,11 @@ async function countActiveTokens() {
 }
 
 async function isOpenMode() {
-  return (await countActiveTokens()) === 0;
+  return isOpenModeAllowed() && (await countActiveTokens()) === 0;
+}
+
+function isOpenModeAllowed() {
+  return String(process.env.EXTENSION_OPEN_MODE || "").trim() === "1";
 }
 
 function invalidateTokenCache() {
@@ -112,8 +119,10 @@ async function getTokenById(id) {
 // Revogar nao apaga a linha: a lista continua mostrando quem teve acesso.
 async function revokeToken(id) {
   const database = await getDatabase();
-  const tokenId = Number(id);
-  if (!Number.isFinite(tokenId)) {
+  // So o numero escrito vale: `--id` sem valor chega da linha de comando como
+  // true, e Number(true) === 1 revogava o token #1.
+  const tokenId = /^\d+$/.test(String(id ?? "").trim()) ? Number(id) : 0;
+  if (!tokenId) {
     throw badRequest("Id de token invalido.");
   }
 
@@ -256,6 +265,7 @@ module.exports = {
   createToken,
   getTokenById,
   isOpenMode,
+  isOpenModeAllowed,
   listTokens,
   openModeIdentity,
   revokeToken
