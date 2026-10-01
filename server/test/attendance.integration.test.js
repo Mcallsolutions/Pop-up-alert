@@ -18,10 +18,30 @@ process.chdir(workDir);
 const NOW = Date.now();
 const ago = (minutes) => new Date(NOW - minutes * 60000).toISOString();
 
-const CLIENT_NAMES = { 5001: "Maria Ficticia Teste", 5002: "Joao Inventado", 5003: "Rita Exemplo", 5004: "Caio Modelo", 5005: "Lia Amostra" };
-const ATTENDANTS = { 5001: "Stephanie", 5002: "Gabriel Oliveira", 5003: "Gabriel Oliveira", 5004: "Stephanie", 5005: "Stephanie" };
-// updatedAt do ticket: 5001 e o mais antigo (primeiro na fila da leitura).
-const TICKET_UPDATED = { 5001: 150, 5002: 120, 5003: 110, 5004: 105, 5005: 100 };
+const CLIENT_NAMES = {
+  5001: "Maria Ficticia Teste",
+  5002: "Joao Inventado",
+  5003: "Rita Exemplo",
+  5004: "Caio Modelo",
+  5005: "Lia Amostra",
+  5006: "Beatriz Exemplar",
+  5007: "Heitor Simulado"
+};
+// Paula nao tem token: o ticket 5006 fica fora do recorte da IA.
+const ATTENDANTS = {
+  5001: "Stephanie",
+  5002: "Gabriel Oliveira",
+  5003: "Gabriel Oliveira",
+  5004: "Stephanie",
+  5005: "Stephanie",
+  5006: "Paula Andrade",
+  5007: "Stephanie"
+};
+// updatedAt do ticket: 5006 e o mais antigo, mas esta fora do recorte; entre os
+// de dentro, 5001 e o primeiro na fila da leitura.
+const TICKET_UPDATED = { 5001: 150, 5002: 120, 5003: 110, 5004: 105, 5005: 100, 5006: 160, 5007: 115 };
+// O 5007 esperou na fila (sem atendente) ate 130 minutos atras.
+const PENDING_UNTIL = { 5007: 130 };
 
 const LOCATION_BODY = "📍\n*Padaria Inventada*\n_Rua Ficticia 99_\nhttps://maps.google.com/maps?q=-3.7319,-38.5267";
 const CONTACT_BODY = JSON.stringify({ ticketzvCard: [{ name: "Fulano Ficticio", number: "5585988887777" }] });
@@ -42,10 +62,24 @@ const FORBIDDEN = [
   "-38.5267",
   "ticketzvCard",
   "Fulano Ficticio",
-  "5585988887777"
+  "5585988887777",
+  // Marca das mensagens fora do recorte: nem mascaradas elas podem ser gravadas.
+  "fora-do-recorte"
 ];
 // Alem deles, a OpenAI nao recebe nome de cliente, de atendente nem de empresa.
-const FORBIDDEN_FOR_OPENAI = [...FORBIDDEN, "Maria", "Joao", "Rita", "Stephanie", "Gabriel", "Oliveira", "0800 TESTE"];
+const FORBIDDEN_FOR_OPENAI = [
+  ...FORBIDDEN,
+  "Maria",
+  "Joao",
+  "Rita",
+  "Beatriz",
+  "Heitor",
+  "Stephanie",
+  "Gabriel",
+  "Oliveira",
+  "Paula",
+  "0800 TESTE"
+];
 
 function buildMessages() {
   const msg = (ticketId, n, minutesAgo, fields) => ({
@@ -90,6 +124,27 @@ function buildMessages() {
       msg(ticketId, 4, base - 8, { fromMe: true, body: `*${ATTENDANTS[ticketId]}:*\nOtimo, qualquer coisa estamos aqui` })
     ];
   }
+
+  // Atendente sem token: se a leitura buscasse, a marca chegaria ao banco.
+  messages[5006] = [
+    msg(5006, 1, 170, { body: "texto fora-do-recorte do cliente" }),
+    msg(5006, 2, 168, { fromMe: true, body: "*Paula Andrade:*\nresposta fora-do-recorte" }),
+    msg(5006, 3, 166, { body: "ok fora-do-recorte" }),
+    msg(5006, 4, 165, { fromMe: true, body: "*Paula Andrade:*\nencerrando fora-do-recorte" })
+  ];
+
+  // Fila de espera, assinatura de quem nao tem token e uma mensagem que a
+  // propria API diz ser de outra fila (99): so 03, 04, 07 e 08 entram.
+  messages[5007] = [
+    msg(5007, 1, 150, { body: "oi fora-do-recorte" }),
+    msg(5007, 2, 149, { fromMe: true, body: "Digite 1 para suporte fora-do-recorte" }),
+    msg(5007, 3, 129, { queueId: 7, body: "minha internet caiu" }),
+    msg(5007, 4, 128, { queueId: 7, fromMe: true, body: "*Stephanie:*\nVou verificar" }),
+    msg(5007, 5, 126, { queueId: 7, fromMe: true, body: "*Paula Andrade:*\nentrei fora-do-recorte" }),
+    msg(5007, 6, 125, { queueId: 99, body: "pergunta no financeiro fora-do-recorte" }),
+    msg(5007, 7, 124, { queueId: 7, body: "voltou" }),
+    msg(5007, 8, 123, { queueId: 7, fromMe: true, body: "*Stephanie:*\nOtimo" })
+  ];
   return messages;
 }
 
@@ -97,16 +152,18 @@ const MESSAGES = buildMessages();
 const mtalkRequests = [];
 const openAiRequests = [];
 
-function buildTicket(ticketId) {
+// minutesAgo: o ticket como a coleta o via naquele momento.
+function buildTicket(ticketId, minutesAgo = 0) {
+  const pending = minutesAgo > (PENDING_UNTIL[ticketId] ?? Infinity);
   return {
     id: ticketId,
     uuid: `00000000-0000-4000-8000-00000000${ticketId}`,
-    status: "open",
+    status: pending ? "pending" : "open",
     unreadMessages: 0,
     updatedAt: ago(TICKET_UPDATED[ticketId]),
     createdAt: ago(200),
     queue: { id: 7, name: "Suporte-MIX" },
-    user: { id: 1, name: ATTENDANTS[ticketId] },
+    user: pending ? null : { id: 1, name: ATTENDANTS[ticketId] },
     whatsapp: { name: "0800 TESTE" },
     contact: { id: ticketId + 100, name: CLIENT_NAMES[ticketId], tags: [] },
     tags: [{ id: 1, name: "TAG TESTE" }]
@@ -198,6 +255,7 @@ let mtalkServer;
 let openAiServer;
 let appServer;
 let api;
+let painel;
 let lastCollection;
 
 async function allTextValues(database) {
@@ -273,11 +331,25 @@ async function collect() {
 
 const messageRequests = () => mtalkRequests.filter((request) => request.url.startsWith("/backend/messages/"));
 
+// Em producao a coleta roda o tempo todo, entao ha leituras de tickets bem antes
+// das mensagens. Aqui elas sao semeadas a cada 2 minutos (a leitura vale 3).
+async function seedReadings() {
+  const { saveSnapshot } = require(path.join(SRC, "services/ticket.service"));
+  const { mapApiTicket } = require(path.join(SRC, "services/mtalk/mtalk.mapper"));
+  const { toZonedIso } = require(path.join(SRC, "services/time-zone"));
+
+  for (let minutesAgo = 200; minutesAgo >= 2; minutesAgo -= 2) {
+    const at = new Date(NOW - minutesAgo * 60000);
+    const tickets = Object.keys(CLIENT_NAMES).map((id) => mapApiTicket(buildTicket(Number(id), minutesAgo), { now: at }));
+    await saveSnapshot({ source: "teste", url: "http://mtalk.local/tickets", collectedAt: toZonedIso(at), tickets });
+  }
+}
+
 test("com AI_ATTENDANCE_ANALYSIS=0 o sistema se comporta como antes", async () => {
   const result = await collect();
   const database = await modules().database.getDatabase();
 
-  assert.equal(result.totalTickets, 5);
+  assert.equal(result.totalTickets, 7);
   assert.equal(messageRequests().length, 0, "nenhuma chamada a /messages");
   assert.equal(result.diagnostics.requisicoesPorEndpoint["GET /messages/{ticketId}"], undefined);
   for (const table of ["messages", "message_sync", "attendance_analyses"]) {
@@ -287,6 +359,11 @@ test("com AI_ATTENDANCE_ANALYSIS=0 o sistema se comporta como antes", async () =
 });
 
 test("teto de leituras por coleta, contado no diagnostico", async () => {
+  const { createToken } = require(path.join(SRC, "services/token.service"));
+  await createToken({ name: "Stephanie - teste", attendant: "Stephanie", role: "ATENDENTE" });
+  await createToken({ name: "Gabriel - teste", attendant: "gabriel oliveira", role: "ATENDENTE" });
+  await seedReadings();
+
   process.env.AI_ATTENDANCE_ANALYSIS = "1";
   process.env.MTALK_MAX_MESSAGE_FETCHES = "2";
 
@@ -296,13 +373,13 @@ test("teto de leituras por coleta, contado no diagnostico", async () => {
   assert.deepEqual(
     messageRequests().map((request) => request.url.split("?")[0]),
     ["/backend/messages/5001", "/backend/messages/5002"],
-    "do updatedAt mais antigo para o mais novo"
+    "do updatedAt mais antigo para o mais novo; o 5006 (fora do recorte) nao gasta o teto"
   );
 
   process.env.MTALK_MAX_MESSAGE_FETCHES = "20";
   lastCollection = await collect();
-  assert.equal(messageRequests().length, 5, "so os 3 que faltavam; quem nao mudou nao e lido de novo");
-  assert.equal(lastCollection.diagnostics.requisicoesPorEndpoint["GET /messages/{ticketId}"], 3);
+  assert.equal(messageRequests().length, 6, "so os 4 que faltavam; quem nao mudou nao e lido de novo");
+  assert.equal(lastCollection.diagnostics.requisicoesPorEndpoint["GET /messages/{ticketId}"], 4);
 });
 
 test("nenhuma requisicao ao MTalk leva markAsRead, e todas sao GET", () => {
@@ -335,12 +412,36 @@ test("mensagens gravadas ja mascaradas: nenhum valor original em nenhuma coluna"
   assert.deepEqual(JSON.parse(byId["ID-5001-09"].flags), ["ORGAO_EXTERNO"]);
 });
 
+test("recorte: so os trechos com atendente vinculado em fila monitorada sao gravados", async () => {
+  const { attendance, database } = modules();
+  const db = await database.getDatabase();
+
+  assert.ok(!messageRequests().some((request) => request.url.startsWith("/backend/messages/5006")), "atendente sem token nem gasta GET");
+  const paula = await db.prepare("SELECT COUNT(*) AS total FROM messages WHERE ticket_id = '5006'").get();
+  assert.equal(paula.total, 0);
+
+  const rows = await db
+    .prepare(`SELECT id, sender_kind AS kind, attendant FROM messages WHERE ticket_id = '5007' ORDER BY created_at`)
+    .all();
+  assert.deepEqual(
+    rows.map((row) => row.id),
+    ["ID-5007-03", "ID-5007-04", "ID-5007-07", "ID-5007-08"],
+    "fora: fila de espera, bot, assinatura sem token e mensagem de outra fila"
+  );
+  assert.ok(rows.every((row) => row.attendant === "Stephanie"));
+
+  const status = await attendance.getAttendanceStatus();
+  assert.deepEqual(status.recorte.atendentesVinculados, ["Gabriel Oliveira", "Stephanie"]);
+  assert.equal(status.leitura.ultima.mensagensForaDoRecorte, 4, "as 4 do 5007 na ultima leitura");
+  assert.equal(status.leitura.ultima.ticketsForaDoRecorte, 1, "o 5006");
+});
+
 test("analise automatica respeita o teto por hora e grava o que a IA devolveu ja mascarado", async () => {
   const { attendance, database } = modules();
   process.env.AI_ANALYSIS_MAX_PER_HOUR = "1";
 
   await attendance.runAutomaticAnalysisIfDue({ force: true });
-  assert.equal(openAiRequests.length, 1, "5 tickets elegiveis, teto de 1 por hora");
+  assert.equal(openAiRequests.length, 1, "6 tickets elegiveis, teto de 1 por hora");
 
   await attendance.runAutomaticAnalysisIfDue({ force: true });
   assert.equal(openAiRequests.length, 1, "o orcamento da hora ja foi gasto");
@@ -387,11 +488,11 @@ test("assertNoPii bloqueia um payload com dado cru: nada vai para a OpenAI", asy
   const db = await database.getDatabase();
   const before = openAiRequests.length;
 
-  // Simula um defeito no mascaramento de entrada.
+  // Simula um defeito no mascaramento de entrada (numa mensagem do recorte).
   await db
     .prepare(
-      `INSERT INTO messages (id, ticket_id, from_me, sender_kind, body_masked, pii_found, flags, created_at, collected_at)
-       VALUES ('ID-CRU', '5002', 0, 'CLIENTE', 'meu cpf e 123.456.789-09', '{}', '[]', ?, ?)`
+      `INSERT INTO messages (id, ticket_id, from_me, sender_kind, attendant, body_masked, pii_found, flags, created_at, collected_at)
+       VALUES ('ID-CRU', '5002', 0, 'CLIENTE', 'Gabriel Oliveira', 'meu cpf e 123.456.789-09', '{}', '[]', ?, ?)`
     )
     .run(new Date(NOW - 100 * 60000).toISOString(), new Date().toISOString());
 
@@ -421,7 +522,7 @@ test("rotas: so o painel acessa, feature desligada responde 403", async () => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ username: "supervisao-teste", password: "senha-de-teste-123" })
   }).then((response) => response.json());
-  const painel = { authorization: `Bearer ${login.session}` };
+  painel = { authorization: `Bearer ${login.session}` };
 
   const { token } = await createToken({ name: "Extensao teste", role: "ADMIN" });
   const extensao = await fetch(`${api}/api/attendance/status`, { headers: { authorization: `Bearer ${token}` } });
@@ -451,6 +552,12 @@ test("rotas: so o painel acessa, feature desligada responde 403", async () => {
   assert.equal(criada.createdBy, "supervisao-teste");
   assert.equal(criada.status, "CONCLUIDA");
 
+  const leiturasAntes = messageRequests().length;
+  const fora = await fetch(`${api}/api/attendance/tickets/5006/analyze`, { method: "POST", headers: painel });
+  assert.equal(fora.status, 400, "atendente sem token: nada no recorte");
+  assert.match((await fora.json()).error, /recorte/);
+  assert.equal(messageRequests().length, leiturasAntes, "nem le o ticket no MTalk");
+
   process.env.AI_ATTENDANCE_ANALYSIS = "0";
   const desligada = await fetch(`${api}/api/attendance/tickets/5003/analyze`, { method: "POST", headers: painel });
   assert.equal(desligada.status, 403);
@@ -459,6 +566,19 @@ test("rotas: so o painel acessa, feature desligada responde 403", async () => {
 
   assert.equal((await fetch(`${api}/api/attendance/tickets/abc/analyze`, { method: "POST", headers: painel })).status, 400);
   assert.equal((await fetch(`${api}/api/attendance/tickets/999999/analyze`, { method: "POST", headers: painel })).status, 404);
+});
+
+test("revogar o token tira o atendente da analise na hora", async () => {
+  const { attendance } = modules();
+  const { listTokens, revokeToken } = require(path.join(SRC, "services/token.service"));
+  const gabriel = (await listTokens()).items.find((item) => item.attendant === "Gabriel Oliveira" && item.isActive);
+  await revokeToken(gabriel.id);
+
+  const leiturasAntes = messageRequests().length;
+  const response = await fetch(`${api}/api/attendance/tickets/5003/analyze`, { method: "POST", headers: painel });
+  assert.equal(response.status, 400, "as mensagens do 5003 continuam no banco, mas fora do recorte");
+  assert.equal(messageRequests().length, leiturasAntes, "sem trecho vinculado, nem le o ticket");
+  assert.deepEqual((await attendance.getAttendanceStatus()).recorte.atendentesVinculados, ["Stephanie"]);
 });
 
 test("de novo: nada do que foi gravado ou enviado tem o valor original", async () => {

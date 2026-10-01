@@ -4,7 +4,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { mapApiMessage } = require("../src/services/mtalk/mtalk.messages");
+const { createAnalysisScope, isWithinAnalysisScope, mapApiMessage } = require("../src/services/mtalk/mtalk.messages");
 
 const T0 = Date.parse("2026-09-30T13:00:00.000Z");
 const minutes = (value) => new Date(T0 + value * 60000).toISOString();
@@ -139,4 +139,93 @@ test("falha fechada: erro no mascaramento grava [MENSAGEM_OCULTA], nunca o texto
   const row = map({ body: "meu cpf e 123.456.789-09" }, { attendantNames: [explode] });
   assert.equal(row.bodyMasked, "[MENSAGEM_OCULTA]");
   assert.deepEqual(row.piiFound, { MENSAGEM_OCULTA: 1 });
+});
+
+// ---------------------------------------------------------------------------
+// Recorte da analise: so trechos com atendente vinculado em fila monitorada.
+
+const MIN = 60000;
+const SCOPE = createAnalysisScope({
+  attendants: ["Stephanie", "aleksandro"],
+  queueIds: [7],
+  readingValidityMs: 3 * MIN
+});
+// Pendente na fila ate o minuto 10; Stephanie do 10 ao 30; Paula (sem token) do
+// 32 ao 40; ticket fora da listagem do 40 ao 60; Stephanie de novo do 60 ao 70.
+const TIMELINE = [
+  { at: T0, until: T0 + 9 * MIN, attendant: "", queue: "Suporte-MIX" },
+  { at: T0 + 10 * MIN, until: T0 + 30 * MIN, attendant: "Stephanie", queue: "Suporte-MIX" },
+  { at: T0 + 32 * MIN, until: T0 + 40 * MIN, attendant: "Paula Andrade", queue: "Suporte-MIX" },
+  { at: T0 + 60 * MIN, until: T0 + 70 * MIN, attendant: "Stephanie", queue: "Suporte-MIX" }
+];
+
+function inScope(overrides, { timeline = TIMELINE, scope = SCOPE } = {}) {
+  return isWithinAnalysisScope(message(overrides), { timeline, scope });
+}
+
+test("recorte: cliente e empresa entram no trecho do atendente vinculado", () => {
+  assert.equal(inScope({ createdAt: minutes(15) }), true);
+  assert.equal(inScope({ createdAt: minutes(16), fromMe: true, body: "*Stephanie:*\nVou verificar" }), true);
+  assert.equal(inScope({ createdAt: minutes(17), fromMe: true, body: "Obrigado pelo contato" }), true, "sem assinatura, vale o trecho");
+  assert.equal(inScope({ createdAt: minutes(65) }), true, "o atendente voltou ao ticket");
+});
+
+test("recorte: bot e fila de espera ficam de fora; assinatura de vinculado supre trecho sem atendente", () => {
+  assert.equal(inScope({ createdAt: minutes(5) }), false, "cliente aguardando na fila");
+  assert.equal(inScope({ createdAt: minutes(6), fromMe: true, body: "Digite 1 para suporte" }), false, "bot");
+  assert.equal(
+    inScope({ createdAt: minutes(9.5), fromMe: true, body: "*Stephanie:*\nBoa tarde, aqui e a Stephanie" }),
+    true,
+    "aceitou entre duas coletas"
+  );
+  assert.equal(inScope({ createdAt: minutes(8), fromMe: true, body: "*Paula Andrade:*\nOi" }), false);
+});
+
+test("recorte: atendente sem token fica de fora, inclusive o cliente no trecho dele", () => {
+  assert.equal(inScope({ createdAt: minutes(35) }), false);
+  assert.equal(inScope({ createdAt: minutes(36), fromMe: true, body: "*Paula Andrade:*\nOla" }), false);
+  assert.equal(
+    inScope({ createdAt: minutes(37), fromMe: true, body: "*Stephanie:*\nAjudando a colega" }),
+    false,
+    "assinatura nao toma o trecho de outra pessoa"
+  );
+  assert.equal(
+    inScope({ createdAt: minutes(20), fromMe: true, body: "*Paula Andrade:*\nEntrei na conversa" }),
+    false,
+    "quem assina sem token fica de fora mesmo no trecho de um vinculado"
+  );
+});
+
+test("recorte: nome do token vale pelo canonico, sem diferenca de maiusculas", () => {
+  const timeline = [{ at: T0, until: T0 + 30 * MIN, attendant: "Aleksandro", queue: "Suporte-IDEZ" }];
+  assert.equal(inScope({ createdAt: minutes(5), fromMe: true, body: "*Alek NETFIBRA:*\nOi" }, { timeline }), true);
+  assert.equal(inScope({ createdAt: minutes(6) }, { timeline }), true);
+});
+
+test("recorte: sem leitura antes, ou longe demais da ultima, fica de fora", () => {
+  assert.equal(inScope({ createdAt: minutes(-5) }), false, "mais velha que a primeira leitura");
+  assert.equal(inScope({ createdAt: minutes(32.5) }, { timeline: TIMELINE.slice(0, 2) }), true, "ate 3 min depois da ultima leitura");
+  assert.equal(inScope({ createdAt: minutes(45) }), false, "ticket fora da listagem (fechado ou em outra fila)");
+  assert.equal(inScope({ createdAt: minutes(15) }, { timeline: [] }), false);
+  assert.equal(isWithinAnalysisScope(message({ createdAt: minutes(15) }), { timeline: TIMELINE }), false, "sem scope, nada entra");
+});
+
+test("recorte: a fila da propria mensagem pega a transferencia entre coletas", () => {
+  assert.equal(inScope({ createdAt: minutes(15), queueId: 7 }), true);
+  assert.equal(inScope({ createdAt: minutes(15), queueId: 99 }), false, "outra fila");
+  assert.equal(inScope({ createdAt: minutes(15), queue: { id: 99, name: "Financeiro" } }), false);
+  assert.equal(inScope({ createdAt: minutes(15), queue: { id: 99, name: "Suporte - TERRANET" } }), true, "o nome decide");
+  assert.equal(inScope({ createdAt: minutes(15), queueId: null }), true, "fila nula nao exclui: vale a leitura");
+
+  const semIds = createAnalysisScope({ attendants: ["Stephanie"], queueIds: [], readingValidityMs: 3 * MIN });
+  assert.equal(inScope({ createdAt: minutes(15), queueId: 99 }, { scope: semIds }), true, "sem a lista de filas, vale a leitura");
+
+  const outraFila = [{ at: T0, until: T0 + 30 * MIN, attendant: "Stephanie", queue: "Comercial" }];
+  assert.equal(inScope({ createdAt: minutes(15) }, { timeline: outraFila }), false, "trecho fora das filas monitoradas");
+});
+
+test("recorte: sem nenhum atendente vinculado, nada entra", () => {
+  const vazio = createAnalysisScope({ attendants: [], queueIds: [7], readingValidityMs: 3 * MIN });
+  assert.equal(inScope({ createdAt: minutes(15) }, { scope: vazio }), false);
+  assert.equal(inScope({ createdAt: minutes(5), fromMe: true, body: "*Stephanie:*\nOi" }, { scope: vazio }), false);
 });

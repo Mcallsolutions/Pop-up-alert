@@ -95,7 +95,8 @@ a tela de login na proxima chamada. Senhas erradas sao limitadas a 10 por IP a c
 
 Cada atendente tem o **seu** token, usado **so pela extensao**. Ele nao tem nada a ver com o `MTALK_TOKEN`: a coleta
 continua sendo uma so, com um token unico do MTalk, e o token da pessoa apenas **recorta os alertas** que chegam no
-pop-up dela.
+pop-up dela. Com a [analise de atendimento](#analise-de-atendimento-ia) ligada, os tokens `ATENDENTE` ativos tambem
+definem **de quem** a IA le as conversas ([Recorte](#recorte-o-que-a-ia-le)).
 
 | Perfil | Recebe |
 | --- | --- |
@@ -366,7 +367,12 @@ AI_ATTENDANCE_ANALYSIS=1
 OPENAI_API_KEY=...
 ```
 
-e reinicie a API. **Configuracoes** mostra se esta ligada, o orcamento usado na hora e a ultima leitura.
+e reinicie a API. **Configuracoes** mostra se esta ligada, o recorte (quem e quais filas a IA le), o orcamento usado na
+hora e a ultima leitura.
+
+A IA so le as conversas dos **atendentes vinculados** — quem tem token de perfil `ATENDENTE` ativo (veja
+[Tokens da extensao](#tokens-da-extensao-quem-ve-o-que)). Sem nenhum token de atendente, ligar a analise nao le
+mensagem nenhuma.
 
 | Variavel | Padrao | Para que |
 | --- | --- | --- |
@@ -379,12 +385,36 @@ e reinicie a API. **Configuracoes** mostra se esta ligada, o orcamento usado na 
 | `AI_ANALYSIS_MAX_PER_HOUR` | `30` | teto de chamadas a OpenAI por hora (`0` pausa a analise automatica) |
 | `AI_ANALYSIS_MODEL` | vazio | modelo so desta analise; vazio usa `OPENAI_MODEL` |
 
+### Recorte: o que a IA le
+
+So entra a mensagem — do cliente ou da empresa — enviada enquanto o ticket estava numa **fila monitorada**
+(Suporte-TerraNet, MIX, IDEZ, BDG, AIA) **com um atendente vinculado** (token `ATENDENTE` ativo). Fica de fora:
+
+- bot e fila de espera (ticket sem atendente), inclusive o que o cliente escreveu enquanto esperava;
+- o trecho de um atendente sem token, inclusive as mensagens do cliente nele;
+- mensagem assinada (`*Nome:*`) por quem nao tem token, mesmo no trecho de um vinculado;
+- conversa em outra fila: pela leitura de tickets do momento e, quando a instancia manda, pelo `queueId` da propria
+  mensagem (pega a transferencia entre duas coletas);
+- mensagem sem leitura de tickets recente antes dela (3 coletas, no minimo 3 minutos): o ticket tinha saido da
+  listagem — fechado ou em outra fila.
+
+Quem estava com o ticket vem da leitura de tickets mais proxima **antes** da mensagem. A unica excecao: mensagem
+assinada por um vinculado num trecho **sem** atendente entra (ele aceitou o ticket entre duas coletas).
+
+O que fica de fora **nem e gravado**, e ticket sem trecho vinculado desde a ultima leitura **nem gasta**
+`GET /messages` — o teto por coleta fica para quem interessa. A janela da analise filtra de novo pelos tokens ativos
+**na hora**: revogar um token tira o atendente da analise imediatamente; emitir um passa a valer na proxima coleta.
+Como as metricas saem so dos trechos do recorte, a espera na fila de espera nao entra na 1a resposta.
+
+Codigo: `isWithinAnalysisScope` em `server/src/services/mtalk/mtalk.messages.js`.
+
 ### Como funciona
 
 1. **Leitura incremental**, depois de cada coleta gravada e fora do caminho dos alertas (a coleta nao espera; uma
    falha aqui nunca derruba a coleta). Primeiro os tickets que sairam de `open`/`pending` (uma busca final, para pegar
-   a despedida), depois os que mudaram, do mais antigo para o mais novo. Com cursor, pede so o que mudou
-   (`minUpdatedAt`). **Nunca** manda `markAsRead`.
+   a despedida), depois os que mudaram, do mais antigo para o mais novo — os dois so quando ha trecho do
+   [recorte](#recorte-o-que-a-ia-le) a ler. Com cursor, pede so o que mudou (`minUpdatedAt`). **Nunca** manda
+   `markAsRead`.
 2. **Mascaramento na entrada** (`server/src/services/pii-mask.js`): o texto original nunca e gravado, nem em log.
 3. **Metricas em codigo** (`attendance-metrics.js`): 1a resposta, tempo medio de resposta, maior espera do cliente
    (contada do INICIO de cada bloco de mensagens dele ate a proxima resposta humana; mensagem automatica nao conta),
@@ -394,9 +424,10 @@ e reinicie a API. **Configuracoes** mostra se esta ligada, o orcamento usado na 
    parada ha `AI_ANALYSIS_IDLE_MINUTES` (ou ticket fechado); ou manual, pelo botao **Analisar de novo**.
 
 Quem escreveu cada mensagem: `CLIENTE` (`fromMe=false`), `ATENDENTE` (com assinatura `*Nome:*` ou `userId`),
-`AUTOMATICA` (a empresa escreveu enquanto o ticket estava sem atendente: bot, fila, saudacao) e `EMPRESA` (a empresa
-escreveu, mas nao da para saber se foi pessoa ou automatico — a IA e avisada). O atendente de cada mensagem vem da
-leitura de tickets mais proxima **antes** dela: uma transferencia nao joga a conversa inteira em quem pegou depois.
+`AUTOMATICA` (a empresa escreveu enquanto o ticket estava sem atendente: bot, fila, saudacao — com o recorte, esse
+trecho ja fica de fora) e `EMPRESA` (a empresa escreveu, mas nao da para saber se foi pessoa ou automatico — a IA e
+avisada). O atendente de cada mensagem vem da leitura de tickets mais proxima **antes** dela: uma transferencia nao
+joga a conversa inteira em quem pegou depois.
 
 ### O que vai para a OpenAI
 
@@ -482,15 +513,17 @@ sistema nao le mensagem nenhuma. **Ligada** (`AI_ATTENDANCE_ANALYSIS=1`), ele pa
 /backend/messages/{ticketId}` — sem `markAsRead`, entao a conversa nao aparece como lida para o atendente — com estas
 camadas de protecao:
 
-1. **mascaramento na entrada**: o texto e mascarado antes de tocar o banco e so a versao mascarada e gravada; o
+1. **recorte**: so sao gravadas as mensagens dos trechos com atendente vinculado (token ativo) em fila monitorada; o
+   resto nem e mascarado — nao toca o banco ([Recorte](#recorte-o-que-a-ia-le));
+2. **mascaramento na entrada**: o texto e mascarado antes de tocar o banco e so a versao mascarada e gravada; o
    original nunca vai para log, erro ou resposta da API. Localizacao e vCard sao descartados inteiros, anexo e nome de
    arquivo tambem. Se o mascaramento falhar, grava `[MENSAGEM_OCULTA]`, nunca o texto cru;
-2. **verificacao antes do envio**: `assertNoPii()` confere o payload inteiro; se algo escapou, nada vai para a OpenAI;
-3. **minimizacao**: a OpenAI nao recebe nome de cliente, de atendente ou de empresa, nem horario absoluto; o que ela
+3. **verificacao antes do envio**: `assertNoPii()` confere o payload inteiro; se algo escapou, nada vai para a OpenAI;
+4. **minimizacao**: a OpenAI nao recebe nome de cliente, de atendente ou de empresa, nem horario absoluto; o que ela
    devolve e mascarado de novo antes de gravar;
-4. **retencao curta**: mensagens mascaradas saem em `MESSAGE_RETENTION_DAYS` (padrao **30**) dias; as analises, em
+5. **retencao curta**: mensagens mascaradas saem em `MESSAGE_RETENTION_DAYS` (padrao **30**) dias; as analises, em
    `RETENTION_DAYS`;
-5. **acesso so de administrador**: mensagens e analises so saem pelas rotas do painel (login com usuario e senha); o
+6. **acesso so de administrador**: mensagens e analises so saem pelas rotas do painel (login com usuario e senha); o
    token da extensao nunca as le.
 
 O banco guarda so a **contagem** do que foi mascarado em cada mensagem (`{"CPF":1}`), nunca o valor. **O que ainda

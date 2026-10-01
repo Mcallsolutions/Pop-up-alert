@@ -122,7 +122,17 @@ ticket de teste** na instancia real (conversa com um numero da propria equipe):
 5. **Assinatura**: com a assinatura ligada, confira o comeco do `body` de uma
    mensagem do atendente. O monitor espera `*Nome:*` seguido de quebra de linha
    (aceita tambem `*Nome*:`). Se for outro formato, as mensagens humanas caem
-   como EMPRESA em vez de ATENDENTE.
+   como EMPRESA em vez de ATENDENTE — e a assinatura de quem nao tem token deixa
+   de tirar a mensagem do recorte.
+6. **`queueId` por mensagem**: transfira o ticket de teste de uma fila monitorada
+   para outra e troque mensagens nas duas. No Ticketz cada mensagem guarda a
+   fila do ticket no momento do envio (`null` antes de o ticket ter fila); o
+   recorte da IA descarta a mensagem cujo `queueId` (ou `queue.name`) e de fila
+   nao monitorada. Confira se o MTalk preenche o campo assim; se vier sempre
+   vazio, o recorte fica so com a leitura de tickets, que nao ve a troca de fila
+   entre duas coletas.
+7. **Tokens**: a IA so le as conversas de quem tem token `ATENDENTE` ativo, com
+   o nome igual ao do MTalk (`user.name`). Emita os tokens antes de ligar.
 
 Depois de ligar, acompanhe em **Configuracoes > Analise de atendimento (IA)** a
 ultima leitura e o orcamento da hora.
