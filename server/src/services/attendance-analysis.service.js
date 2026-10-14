@@ -685,14 +685,29 @@ const NEGATIVE_SQL = `CASE WHEN json_extract(a.content, '$.sentimentoCliente') I
 const HIGH_RISK_SQL = `CASE WHEN json_extract(a.content, '$.riscoCancelamento') = 'ALTO' THEN 1 ELSE 0 END`;
 const EXTERNAL_SQL = `CASE WHEN json_extract(a.content, '$.mencionaOrgaoExterno') = 1 THEN 1 ELSE 0 END`;
 
+// Desfecho decidido pelo sistema (nao pela IA): ticket transferido = nao
+// resolvido; ticket finalizado (fechado no MTalk) = resolvido; o resto ainda
+// esta em andamento.
+const TRANSFERRED_SQL = `(coalesce(json_extract(a.metrics, '$.teveTransferencia'), 0) = 1)`;
+const CLOSED_SQL = `EXISTS (SELECT 1 FROM message_sync s WHERE s.ticket_id = a.ticket_id AND s.closed_at IS NOT NULL)`;
+const OUTCOME_SQL = `CASE WHEN ${TRANSFERRED_SQL} THEN 'TRANSFERIDO' WHEN ${CLOSED_SQL} THEN 'FINALIZADO' ELSE 'EM_ANDAMENTO' END`;
+const OUTCOMES = ["FINALIZADO", "TRANSFERIDO", "EM_ANDAMENTO"];
+const PAGE_SIZE = 15;
+
 async function listAnalyses(filters = {}) {
   const database = await getDatabase();
   const { where, params } = buildAnalysisFilters(filters);
-  const limit = Math.min(Math.max(Number(filters.limit) || 200, 1), 500);
+
+  const totalItems = (await database.prepare(`SELECT COUNT(*) AS total FROM attendance_analyses a ${where}`).get(...params))?.total;
+  const totalPages = Math.max(1, Math.ceil(Number(totalItems || 0) / PAGE_SIZE));
+  const page = Math.min(Math.max(Math.floor(Number(filters.page)) || 1, 1), totalPages);
 
   const rows = await database
-    .prepare(`SELECT ${ANALYSIS_COLUMNS_SQL} FROM attendance_analyses a ${where} ORDER BY a.created_at DESC, a.id DESC LIMIT ?`)
-    .all(...params, limit);
+    .prepare(
+      `SELECT ${ANALYSIS_COLUMNS_SQL}, ${OUTCOME_SQL} AS outcome
+       FROM attendance_analyses a ${where} ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`
+    )
+    .all(...params, PAGE_SIZE, (page - 1) * PAGE_SIZE);
 
   const concluidas = buildWhere(where, "a.status = 'CONCLUIDA'");
   const totals = await database
@@ -706,14 +721,22 @@ async function listAnalyses(filters = {}) {
        FROM attendance_analyses a ${concluidas}`
     )
     .get(...params);
+  const outcomes = await database
+    .prepare(`SELECT ${OUTCOME_SQL} AS outcome, COUNT(*) AS total FROM attendance_analyses a ${where} GROUP BY outcome`)
+    .all(...params);
+  const outcomeTotal = (name) => Number(outcomes.find((row) => row.outcome === name)?.total || 0);
   const bloqueadas = await database
     .prepare(`SELECT COUNT(*) AS total FROM attendance_analyses a ${buildWhere(where, "a.status = 'BLOQUEADA'")}`)
     .get(...params);
 
   const analisadas = Number(totals?.analisadas || 0);
   return {
-    items: rows.map(normalizeAnalysisRow),
+    items: rows.map((row) => ({ ...normalizeAnalysisRow(row), desfecho: row.outcome })),
+    paginacao: { pagina: page, porPagina: PAGE_SIZE, total: Number(totalItems || 0), totalPaginas: totalPages },
     totais: {
+      resolvidos: outcomeTotal("FINALIZADO"),
+      naoResolvidos: outcomeTotal("TRANSFERIDO"),
+      emAndamento: outcomeTotal("EM_ANDAMENTO"),
       analisadas,
       bloqueadas: Number(bloqueadas?.total || 0),
       notaMedia: roundOne(totals?.notaMedia),
@@ -768,12 +791,14 @@ async function getAnalysis(id) {
   }
 
   const database = await getDatabase();
-  const row = await database.prepare(`SELECT ${ANALYSIS_COLUMNS_SQL} FROM attendance_analyses a WHERE a.id = ?`).get(analysisId);
+  const row = await database
+    .prepare(`SELECT ${ANALYSIS_COLUMNS_SQL}, ${OUTCOME_SQL} AS outcome FROM attendance_analyses a WHERE a.id = ?`)
+    .get(analysisId);
   if (!row) {
     throwPublic(404, "Analise nao encontrada.");
   }
 
-  const analysis = normalizeAnalysisRow(row);
+  const analysis = { ...normalizeAnalysisRow(row), desfecho: row.outcome };
   const evidencias = new Map((analysis.content?.evidencias || []).map((item) => [item.mensagemId, item.motivo]));
   const messages = analysis.windowStart
     ? await database
@@ -868,6 +893,12 @@ function buildAnalysisFilters(filters = {}) {
   if (sentimento) {
     conditions.push("json_extract(a.content, '$.sentimentoCliente') = ?");
     params.push(pickEnum(sentimento, SENTIMENTOS, ""));
+  }
+
+  const desfecho = String(filters.desfecho || "").trim().toUpperCase();
+  if (OUTCOMES.includes(desfecho)) {
+    conditions.push(`${OUTCOME_SQL} = ?`);
+    params.push(desfecho);
   }
 
   const notaMax = Number(filters.notaMax);

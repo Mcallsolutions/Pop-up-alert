@@ -541,6 +541,13 @@ test("rotas: so o painel acessa, feature desligada responde 403", async () => {
   assert.equal(lista.items[0].clientName, CLIENT_NAMES[5001], "nome do cliente so no painel");
   assert.equal(lista.totais.analisadas, 1);
   assert.equal(lista.totais.bloqueadas, 0);
+  assert.deepEqual(lista.paginacao, { pagina: 1, porPagina: 15, total: 1, totalPaginas: 1 });
+  assert.ok(["FINALIZADO", "TRANSFERIDO", "EM_ANDAMENTO"].includes(lista.items[0].desfecho));
+  assert.equal(
+    lista.totais.resolvidos + lista.totais.naoResolvidos + lista.totais.emAndamento,
+    lista.paginacao.total,
+    "todo atendimento tem um desfecho"
+  );
 
   const porAtendente = await fetch(`${api}/api/attendance/by-attendant`, { headers: painel }).then((response) => response.json());
   assert.deepEqual(porAtendente.items.map((item) => item.attendant), ["Stephanie"]);

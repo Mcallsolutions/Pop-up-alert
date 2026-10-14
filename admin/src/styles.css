@@ -802,7 +802,16 @@ tbody tr:hover {
 
 /* Analise de atendimento por IA: filtros extras, detalhe e transcricao. */
 .attendance-filters {
-  grid-template-columns: repeat(3, minmax(160px, 260px));
+  grid-template-columns: repeat(4, minmax(160px, 260px));
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding-top: 12px;
+  flex-wrap: wrap;
 }
 
 .attendance-detail {
