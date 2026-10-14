@@ -182,6 +182,7 @@ function AttendanceStatus({ status }) {
   const leitura = status.leitura?.ultima;
   const automatica = status.analiseAutomatica?.ultima;
   const config = status.config || {};
+  const vinculados = status.recorte?.atendentesVinculados || [];
 
   return (
     <div className="table-panel">
@@ -196,6 +197,16 @@ function AttendanceStatus({ status }) {
                   {status.ligada ? "ligada" : "desligada (AI_ATTENDANCE_ANALYSIS=0)"}
                 </span>
                 {status.ligada && !status.openaiConfigurado ? " — OPENAI_API_KEY nao configurada" : ""}
+              </td>
+            </tr>
+            <tr>
+              <td>Recorte da IA</td>
+              <td>
+                {vinculados.length
+                  ? `${vinculados.join(", ")} (tokens de atendente ativos)`
+                  : "nenhum atendente vinculado — emita um token de atendente para a IA ler as conversas dele"}
+                {" — filas "}
+                {(status.recorte?.filas || []).join(", ")}
               </td>
             </tr>
             <tr>
@@ -215,7 +226,7 @@ function AttendanceStatus({ status }) {
               <td>Ultima leitura de mensagens</td>
               <td>
                 {leitura?.fim
-                  ? `${formatDateTime(leitura.fim)} — ${leitura.ok ? "ok" : `falhou: ${leitura.erro}`}, ${leitura.requisicoes} requisicao(oes), ${leitura.mensagensGravadas} mensagem(ns)`
+                  ? `${formatDateTime(leitura.fim)} — ${leitura.ok ? "ok" : `falhou: ${leitura.erro}`}, ${leitura.requisicoes} requisicao(oes), ${leitura.mensagensGravadas} mensagem(ns) gravada(s), ${leitura.mensagensForaDoRecorte ?? 0} fora do recorte, ${leitura.ticketsForaDoRecorte ?? 0} ticket(s) sem trecho vinculado`
                   : "-"}
               </td>
             </tr>

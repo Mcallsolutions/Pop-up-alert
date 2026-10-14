@@ -10,7 +10,11 @@ import { formatDateTime, formatMinutes } from "../../services/datetime";
 // O nome do cliente vem da coleta de tickets e so existe no painel — ele nao
 // vai para a IA.
 
-const emptyExtra = { riscoCancelamento: "", sentimentoCliente: "", notaMax: "" };
+const emptyExtra = { riscoCancelamento: "", sentimentoCliente: "", notaMax: "", desfecho: "" };
+
+// Desfecho decidido pelo sistema: transferido = nao resolvido; finalizado = resolvido.
+const DESFECHOS = { FINALIZADO: "Resolvido", TRANSFERIDO: "Nao resolvido", EM_ANDAMENTO: "Em andamento" };
+const DESFECHO_BADGE = { FINALIZADO: "risco-baixo", TRANSFERIDO: "risco-alto", EM_ANDAMENTO: "" };
 
 const SENTIMENTOS = { POSITIVO: "Positivo", NEUTRO: "Neutro", NEGATIVO: "Negativo", MUITO_NEGATIVO: "Muito negativo" };
 const RISCOS = { BAIXO: "Baixo", MEDIO: "Medio", ALTO: "Alto" };
@@ -61,6 +65,7 @@ export default function AttendancePage() {
   const [status, setStatus] = useState(null);
   const [analyses, setAnalyses] = useState([]);
   const [totais, setTotais] = useState(null);
+  const [pagination, setPagination] = useState(null);
   const [attendants, setAttendants] = useState([]);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -69,18 +74,19 @@ export default function AttendancePage() {
   const [error, setError] = useState("");
   const [feedback, setFeedback] = useState("");
 
-  async function load(activeFilters = filters, activeExtra = extra) {
+  async function load(activeFilters = filters, activeExtra = extra, targetPage = 1) {
     const query = { ...activeFilters, ...activeExtra };
     setLoading(true);
     setError("");
     try {
       const [statusData, analysisData, attendantData] = await Promise.all([
         api.attendanceStatus(),
-        api.attendanceAnalyses(query),
+        api.attendanceAnalyses({ ...query, page: targetPage }),
         api.attendanceByAttendant(query)
       ]);
       setStatus(statusData);
       setAnalyses(analysisData.items || []);
+      setPagination(analysisData.paginacao || null);
       setTotais(analysisData.totais || null);
       setAttendants(attendantData.items || []);
     } catch (requestError) {
@@ -144,12 +150,28 @@ export default function AttendancePage() {
     }
   }
 
-  function buildExportMeta() {
+  // A exportacao leva todas as paginas do recorte, nao so a que esta na tela.
+  async function fetchAllAnalyses() {
+    const query = { ...filters, ...extra };
+    const items = [];
+    let page = 1;
+    let totalPages = 1;
+    do {
+      const data = await api.attendanceAnalyses({ ...query, page });
+      items.push(...(data.items || []));
+      totalPages = data.paginacao?.totalPaginas || 1;
+      page += 1;
+    } while (page <= totalPages);
+    return items;
+  }
+
+  async function buildExportMeta() {
+    const all = await fetchAllAnalyses();
     return {
       title: "Analise de atendimento (IA)",
       subtitle: describeFilters({ ...filters, ...extra }),
       headers: EXPORT_HEADERS,
-      rows: analyses.map((item) => [
+      rows: all.map((item) => [
         formatDateTime(item.createdAt),
         item.clientName || "-",
         item.attendant || "-",
@@ -157,7 +179,7 @@ export default function AttendancePage() {
         item.status === "BLOQUEADA" ? "Bloqueada" : item.content?.nota ?? "-",
         SENTIMENTOS[item.content?.sentimentoCliente] || "-",
         RISCOS[item.content?.riscoCancelamento] || "-",
-        RESOLVIDO[item.content?.resolvido] || "-",
+        DESFECHOS[item.desfecho] || "-",
         ASSUNTOS[item.content?.assunto] || "-",
         formatMinutes(item.metrics?.primeiraRespostaMinutos),
         formatMinutes(item.metrics?.maiorEsperaClienteMinutos),
@@ -168,7 +190,7 @@ export default function AttendancePage() {
 
   async function handleExportPdf() {
     try {
-      await exportPdf({ ...buildExportMeta(), fileName: buildFileName("analise-atendimento", "pdf") });
+      await exportPdf({ ...(await buildExportMeta()), fileName: buildFileName("analise-atendimento", "pdf") });
     } catch (exportError) {
       setError(exportError.message || "Falha ao gerar o arquivo PDF");
     }
@@ -176,7 +198,7 @@ export default function AttendancePage() {
 
   async function handleExportDocx() {
     try {
-      await exportDocx({ ...buildExportMeta(), fileName: buildFileName("analise-atendimento", "docx") });
+      await exportDocx({ ...(await buildExportMeta()), fileName: buildFileName("analise-atendimento", "docx") });
     } catch (exportError) {
       setError(exportError.message || "Falha ao gerar o arquivo DOCX");
     }
@@ -231,6 +253,17 @@ export default function AttendancePage() {
           </select>
         </label>
         <label>
+          Desfecho
+          <select value={extra.desfecho} onChange={(event) => updateExtra("desfecho", event.target.value)}>
+            <option value="">Todos</option>
+            {Object.entries(DESFECHOS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
           Nota ate
           <select value={extra.notaMax} onChange={(event) => updateExtra("notaMax", event.target.value)}>
             <option value="">Todas</option>
@@ -248,6 +281,8 @@ export default function AttendancePage() {
 
       <div className="metric-grid">
         <Metric label="Analisadas" value={totais?.analisadas ?? 0} />
+        <Metric label="Resolvidos" value={totais?.resolvidos ?? 0} tone="success" />
+        <Metric label="Nao resolvidos" value={totais?.naoResolvidos ?? 0} tone="danger" />
         <Metric label="Nota media" value={totais?.notaMedia ?? "-"} tone="success" />
         <Metric label="Sentimento negativo" value={`${totais?.percentNegativo ?? 0}%`} tone="warning" />
         <Metric label="Risco alto" value={totais?.riscoAlto ?? 0} tone="danger" />
@@ -301,7 +336,9 @@ export default function AttendancePage() {
                         "-"
                       )}
                     </td>
-                    <td>{RESOLVIDO[item.content?.resolvido] || "-"}</td>
+                    <td>
+                      <span className={`badge ${DESFECHO_BADGE[item.desfecho] || ""}`}>{DESFECHOS[item.desfecho] || "-"}</span>
+                    </td>
                     <td>{countAlerts(item) || "-"}</td>
                     <td>
                       <button className="link-button" type="button" onClick={() => openDetail(item.id)}>
@@ -318,6 +355,29 @@ export default function AttendancePage() {
             </tbody>
           </table>
         </div>
+        {pagination && pagination.totalPaginas > 1 ? (
+          <nav className="pagination" aria-label="Paginacao das analises">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={loading || pagination.pagina <= 1}
+              onClick={() => load(filters, extra, pagination.pagina - 1)}
+            >
+              Anterior
+            </button>
+            <span>
+              Pagina {pagination.pagina} de {pagination.totalPaginas} ({pagination.total} atendimentos)
+            </span>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={loading || pagination.pagina >= pagination.totalPaginas}
+              onClick={() => load(filters, extra, pagination.pagina + 1)}
+            >
+              Proxima
+            </button>
+          </nav>
+        ) : null}
       </section>
 
       <section className="table-panel">
@@ -442,7 +502,10 @@ function AnalysisDetail({ analysis, analyzing, onReanalyze, onClose }) {
               <span className={`badge ${RISCO_BADGE[content.riscoCancelamento] || ""}`}>
                 Risco {RISCOS[content.riscoCancelamento] || "-"}
               </span>
-              <span className="badge">Resolvido: {RESOLVIDO[content.resolvido] || "-"}</span>
+              <span className={`badge ${DESFECHO_BADGE[analysis.desfecho] || ""}`}>
+                {DESFECHOS[analysis.desfecho] || "-"}
+              </span>
+              <span className="badge">Resolvido segundo a IA: {RESOLVIDO[content.resolvido] || "-"}</span>
               <span className="badge">{ASSUNTOS[content.assunto] || "-"}</span>
               {content.mencionaOrgaoExterno ? <span className="badge risco-alto">Orgao externo</span> : null}
             </div>
@@ -583,6 +646,7 @@ function describeFilters(filters) {
     clientName: "Cliente",
     riscoCancelamento: "Risco",
     sentimentoCliente: "Sentimento",
+    desfecho: "Desfecho",
     notaMax: "Nota ate"
   };
   const active = Object.entries(labels)

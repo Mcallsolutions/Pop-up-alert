@@ -12,6 +12,12 @@
 //      log registra so o tipo e a quantidade;
 //   4. os textos devolvidos pela IA sao mascarados de novo antes de gravar.
 //
+// Recorte: a IA so le os trechos em que o ticket estava numa fila monitorada
+// com um atendente vinculado (token ATENDENTE ativo). A leitura ja nao grava o
+// resto (mtalk.message-sync.js); aqui a janela e a fila automatica filtram de
+// novo pelos tokens ativos AGORA — revogar um token tira o atendente da
+// analise na hora.
+//
 // Quando analisa:
 // - automatica: depois da leitura das mensagens, no maximo a cada 5 minutos,
 //   para ticket com mensagem nova desde a ultima analise, conversa parada ha
@@ -29,8 +35,10 @@ const { composeSystemPrompt, listPrompts } = require("./ai.service");
 const { buildSystemAlerts, computeAttendanceMetrics } = require("./attendance-metrics");
 const { createJsonCompletion, getOpenAiStatus, isOpenAiConfigured } = require("./openai.service");
 const { assertNoPii, maskText } = require("./pii-mask");
+const { getAllowedQueues } = require("./queue-filter");
 const { addAttendantFilter, addLikeFilter, addNormalizedLikeFilter, appendDateRange } = require("./report.service");
 const { toZonedIso } = require("./time-zone");
+const { listLinkedAttendants } = require("./token.service");
 const {
   describeMessageSync,
   isRecentReading,
@@ -40,7 +48,8 @@ const {
   waitForMessageSync
 } = require("./mtalk/mtalk.message-sync");
 
-const ATTENDANCE_PROMPT_VERSION = "1";
+// 2: a conversa passou a vir recortada (so trechos com atendente vinculado).
+const ATTENDANCE_PROMPT_VERSION = "2";
 const AUTOMATIC_INTERVAL_MS = 5 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 // Ticket fora da listagem ha mais de um dia nao entra mais na fila automatica.
@@ -153,6 +162,7 @@ const ATTENDANCE_SYSTEM_PROMPT = `Voce e o analista de qualidade de atendimento 
 Recebe UMA conversa de atendimento por WhatsApp registrada no MTalk, ja anonimizada, e avalia o atendimento em portugues do Brasil.
 
 Como ler os dados:
+- A janela traz so os trechos da conversa em que o ticket estava com um atendente da equipe avaliada, numa fila de suporte monitorada. Bot, fila de espera e conversa em outro setor foram retirados antes do envio: um salto no "minuto" ou um assunto que comeca no meio pode ser esse recorte. Nao trate a ausencia desses trechos como falha do atendente.
 - Cada mensagem tem "id", "autor" e "minuto" (minutos desde a primeira mensagem da janela).
 - autor CLIENTE e o cliente. ATENDENTE e uma pessoa da equipe. EMPRESA foi enviada pela empresa sem confirmacao de autoria: pode ser o atendente ou uma mensagem automatica. AUTOMATICA e bot, fila, saudacao ou despedida.
 - Nunca avalie o atendente por mensagens AUTOMATICA. Mensagem EMPRESA com cara de texto padrao (saudacao, menu, despedida) tambem nao conta como atitude do atendente.
@@ -195,12 +205,12 @@ const ticketCooldown = new Map();
 
 // Chamado pela coleta gravada, sem await: leitura das mensagens e, depois
 // dela, a rodada automatica (se for hora). Com a feature desligada, nada.
-function startAttendanceWork({ tickets, collectedAt, now = new Date(), diagnostics = null } = {}) {
+function startAttendanceWork({ tickets, collectedAt, now = new Date(), diagnostics = null, queueIds = [] } = {}) {
   if (!getAttendanceConfig().enabled) {
     return null;
   }
 
-  backgroundWork = syncMessagesAfterCollection({ tickets, collectedAt, now, diagnostics })
+  backgroundWork = syncMessagesAfterCollection({ tickets, collectedAt, now, diagnostics, queueIds })
     .catch((error) => {
       console.warn("[Atendimento] Falha na leitura das mensagens:", error.publicMessage || error.message);
     })
@@ -288,10 +298,15 @@ async function runAutomaticAnalysis(config, now) {
   }
 }
 
-// Tickets com mensagem nova desde a ultima analise, parados (ou fechados) e
-// com conversa suficiente. Fechados primeiro; depois quem esta parado ha mais
-// tempo.
+// Tickets com mensagem nova do recorte desde a ultima analise, parados (ou
+// fechados) e com conversa suficiente. Fechados primeiro; depois quem esta
+// parado ha mais tempo.
 async function findEligibleTickets(config, now, limit) {
+  const linked = await listLinkedAttendants();
+  if (!linked.length) {
+    return [];
+  }
+
   const database = await getDatabase();
   const since = toZonedIso(new Date(now.getTime() - ELIGIBLE_LOOKBACK_MS));
   const idleCutoff = toZonedIso(new Date(now.getTime() - config.idleMinutes * 60000));
@@ -309,6 +324,7 @@ async function findEligibleTickets(config, now, limit) {
        LEFT JOIN ultima u ON u.ticket_id = s.ticket_id
        WHERE (s.last_seen_at >= ? OR s.closed_at >= ?)
          AND (u.window_end IS NULL OR m.created_at > u.window_end)
+         AND ${linkedAttendantSql("m.attendant", linked)}
        GROUP BY s.ticket_id, s.closed_at
        HAVING COUNT(m.id) >= ?
          AND SUM(CASE WHEN m.sender_kind = 'CLIENTE' THEN 1 ELSE 0 END) >= 1
@@ -317,7 +333,14 @@ async function findEligibleTickets(config, now, limit) {
        ORDER BY CASE WHEN s.closed_at IS NULL THEN 1 ELSE 0 END, MAX(m.created_at)
        LIMIT ?`
     )
-    .all(since, since, config.minMessages, idleCutoff, Math.max(1, limit));
+    .all(since, since, ...linked, config.minMessages, idleCutoff, Math.max(1, limit));
+}
+
+// A coluna attendant da mensagem guarda quem estava com o ticket no momento
+// (ou quem assinou, num trecho sem atendente). Mesma comparacao do recorte dos
+// relatorios (report.service): nome canonico, sem diferenca de maiusculas.
+function linkedAttendantSql(column, linked) {
+  return `UPPER(trim(coalesce(${column}, ''))) IN (${linked.map(() => "UPPER(?)").join(", ")})`;
 }
 
 async function countCallsLastHour(now = new Date()) {
@@ -364,6 +387,12 @@ async function analyzeTicketManually(ticketId, { createdBy = null } = {}) {
   if (!(await loadLatestReading(database, id))) {
     throwPublic(404, "Ticket nao encontrado nas coletas das filas monitoradas.");
   }
+  if (!(await listLinkedAttendants()).length) {
+    throwPublic(
+      400,
+      "Nenhum atendente vinculado: a analise so le conversas de quem tem token ATENDENTE ativo. Emita os tokens em Configuracoes > Tokens da extensao."
+    );
+  }
 
   // Token recusado pelo MTalk volta como 502 daqui; outro erro so daquele
   // ticket deixa analisar o que ja esta no banco.
@@ -397,11 +426,15 @@ async function analyzeTicket({ ticketId, trigger, createdBy = null, manual = fal
     // janela de novo, mais o que chegou depois.
     since: manual ? previous?.windowStart : previous?.windowEnd,
     inclusive: manual,
-    maxMessages: config.maxMessages
+    maxMessages: config.maxMessages,
+    linked: await listLinkedAttendants()
   });
 
   if (!window.messages.length) {
-    throwPublic(400, "Nenhuma mensagem deste ticket foi lida ainda. Aguarde a proxima coleta e tente de novo.");
+    throwPublic(
+      400,
+      "Nenhuma mensagem deste ticket esta no recorte da analise (atendente com token ATENDENTE ativo, em fila monitorada). Se o ticket acabou de mudar, aguarde a proxima coleta e tente de novo."
+    );
   }
 
   const closed = Boolean(syncRow?.closedAt) || !isRecentReading(reading, now);
@@ -476,14 +509,19 @@ async function analyzeTicket({ ticketId, trigger, createdBy = null, manual = fal
   });
 }
 
-// Mensagens da janela, da mais antiga para a mais nova. Passando do teto,
-// ficam as MAIS RECENTES (o fim da conversa e o que decide sentimento e
-// resolucao) e a janela e marcada como truncada.
-async function loadWindow(database, { ticketId, since, inclusive, maxMessages }) {
-  const params = [ticketId];
-  let condition = "";
+// Mensagens da janela, da mais antiga para a mais nova, so do recorte (linked:
+// atendentes vinculados agora). Passando do teto, ficam as MAIS RECENTES (o fim
+// da conversa e o que decide sentimento e resolucao) e a janela e marcada como
+// truncada.
+async function loadWindow(database, { ticketId, since, inclusive, maxMessages, linked }) {
+  if (!linked.length) {
+    return { truncated: false, messages: [] };
+  }
+
+  const params = [ticketId, ...linked];
+  let condition = `AND ${linkedAttendantSql("attendant", linked)}`;
   if (since) {
-    condition = `AND created_at ${inclusive ? ">=" : ">"} ?`;
+    condition += ` AND created_at ${inclusive ? ">=" : ">"} ?`;
     params.push(since);
   }
 
@@ -647,14 +685,29 @@ const NEGATIVE_SQL = `CASE WHEN json_extract(a.content, '$.sentimentoCliente') I
 const HIGH_RISK_SQL = `CASE WHEN json_extract(a.content, '$.riscoCancelamento') = 'ALTO' THEN 1 ELSE 0 END`;
 const EXTERNAL_SQL = `CASE WHEN json_extract(a.content, '$.mencionaOrgaoExterno') = 1 THEN 1 ELSE 0 END`;
 
+// Desfecho decidido pelo sistema (nao pela IA): ticket transferido = nao
+// resolvido; ticket finalizado (fechado no MTalk) = resolvido; o resto ainda
+// esta em andamento.
+const TRANSFERRED_SQL = `(coalesce(json_extract(a.metrics, '$.teveTransferencia'), 0) = 1)`;
+const CLOSED_SQL = `EXISTS (SELECT 1 FROM message_sync s WHERE s.ticket_id = a.ticket_id AND s.closed_at IS NOT NULL)`;
+const OUTCOME_SQL = `CASE WHEN ${TRANSFERRED_SQL} THEN 'TRANSFERIDO' WHEN ${CLOSED_SQL} THEN 'FINALIZADO' ELSE 'EM_ANDAMENTO' END`;
+const OUTCOMES = ["FINALIZADO", "TRANSFERIDO", "EM_ANDAMENTO"];
+const PAGE_SIZE = 15;
+
 async function listAnalyses(filters = {}) {
   const database = await getDatabase();
   const { where, params } = buildAnalysisFilters(filters);
-  const limit = Math.min(Math.max(Number(filters.limit) || 200, 1), 500);
+
+  const totalItems = (await database.prepare(`SELECT COUNT(*) AS total FROM attendance_analyses a ${where}`).get(...params))?.total;
+  const totalPages = Math.max(1, Math.ceil(Number(totalItems || 0) / PAGE_SIZE));
+  const page = Math.min(Math.max(Math.floor(Number(filters.page)) || 1, 1), totalPages);
 
   const rows = await database
-    .prepare(`SELECT ${ANALYSIS_COLUMNS_SQL} FROM attendance_analyses a ${where} ORDER BY a.created_at DESC, a.id DESC LIMIT ?`)
-    .all(...params, limit);
+    .prepare(
+      `SELECT ${ANALYSIS_COLUMNS_SQL}, ${OUTCOME_SQL} AS outcome
+       FROM attendance_analyses a ${where} ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`
+    )
+    .all(...params, PAGE_SIZE, (page - 1) * PAGE_SIZE);
 
   const concluidas = buildWhere(where, "a.status = 'CONCLUIDA'");
   const totals = await database
@@ -668,14 +721,22 @@ async function listAnalyses(filters = {}) {
        FROM attendance_analyses a ${concluidas}`
     )
     .get(...params);
+  const outcomes = await database
+    .prepare(`SELECT ${OUTCOME_SQL} AS outcome, COUNT(*) AS total FROM attendance_analyses a ${where} GROUP BY outcome`)
+    .all(...params);
+  const outcomeTotal = (name) => Number(outcomes.find((row) => row.outcome === name)?.total || 0);
   const bloqueadas = await database
     .prepare(`SELECT COUNT(*) AS total FROM attendance_analyses a ${buildWhere(where, "a.status = 'BLOQUEADA'")}`)
     .get(...params);
 
   const analisadas = Number(totals?.analisadas || 0);
   return {
-    items: rows.map(normalizeAnalysisRow),
+    items: rows.map((row) => ({ ...normalizeAnalysisRow(row), desfecho: row.outcome })),
+    paginacao: { pagina: page, porPagina: PAGE_SIZE, total: Number(totalItems || 0), totalPaginas: totalPages },
     totais: {
+      resolvidos: outcomeTotal("FINALIZADO"),
+      naoResolvidos: outcomeTotal("TRANSFERIDO"),
+      emAndamento: outcomeTotal("EM_ANDAMENTO"),
       analisadas,
       bloqueadas: Number(bloqueadas?.total || 0),
       notaMedia: roundOne(totals?.notaMedia),
@@ -730,12 +791,14 @@ async function getAnalysis(id) {
   }
 
   const database = await getDatabase();
-  const row = await database.prepare(`SELECT ${ANALYSIS_COLUMNS_SQL} FROM attendance_analyses a WHERE a.id = ?`).get(analysisId);
+  const row = await database
+    .prepare(`SELECT ${ANALYSIS_COLUMNS_SQL}, ${OUTCOME_SQL} AS outcome FROM attendance_analyses a WHERE a.id = ?`)
+    .get(analysisId);
   if (!row) {
     throwPublic(404, "Analise nao encontrada.");
   }
 
-  const analysis = normalizeAnalysisRow(row);
+  const analysis = { ...normalizeAnalysisRow(row), desfecho: row.outcome };
   const evidencias = new Map((analysis.content?.evidencias || []).map((item) => [item.mensagemId, item.motivo]));
   const messages = analysis.windowStart
     ? await database
@@ -773,10 +836,11 @@ async function getAnalysis(id) {
 async function getAttendanceStatus() {
   const config = getAttendanceConfig();
   const database = await getDatabase();
-  const [mensagens, acompanhados, analises] = await Promise.all([
+  const [mensagens, acompanhados, analises, atendentesVinculados] = await Promise.all([
     database.prepare("SELECT COUNT(*) AS total FROM messages").get(),
     database.prepare("SELECT COUNT(*) AS total FROM message_sync WHERE closed_at IS NULL").get(),
-    database.prepare("SELECT COUNT(*) AS total FROM attendance_analyses").get()
+    database.prepare("SELECT COUNT(*) AS total FROM attendance_analyses").get(),
+    listLinkedAttendants()
   ]);
 
   return {
@@ -784,6 +848,8 @@ async function getAttendanceStatus() {
     openaiConfigurado: isOpenAiConfigured(),
     modelo: config.model || getOpenAiStatus().modelo,
     versaoPrompt: ATTENDANCE_PROMPT_VERSION,
+    // O que a IA le: so estes atendentes, so nestas filas.
+    recorte: { atendentesVinculados, filas: getAllowedQueues() },
     orcamentoHora: { usadas: await countCallsLastHour(new Date()), limite: config.maxPerHour },
     mensagensNoBanco: Number(mensagens?.total || 0),
     ticketsAcompanhados: Number(acompanhados?.total || 0),
@@ -827,6 +893,12 @@ function buildAnalysisFilters(filters = {}) {
   if (sentimento) {
     conditions.push("json_extract(a.content, '$.sentimentoCliente') = ?");
     params.push(pickEnum(sentimento, SENTIMENTOS, ""));
+  }
+
+  const desfecho = String(filters.desfecho || "").trim().toUpperCase();
+  if (OUTCOMES.includes(desfecho)) {
+    conditions.push(`${OUTCOME_SQL} = ?`);
+    params.push(desfecho);
   }
 
   const notaMax = Number(filters.notaMax);

@@ -20,7 +20,8 @@ router.get("/status", async (_req, res, next) => {
 });
 
 // Filtros: day, startDate, endDate, attendant, queue, company, clientName,
-// riscoCancelamento, sentimentoCliente, notaMax e limit.
+// riscoCancelamento, sentimentoCliente, notaMax, desfecho (FINALIZADO,
+// TRANSFERIDO, EM_ANDAMENTO) e page (15 por pagina).
 router.get("/analyses", async (req, res, next) => {
   try {
     res.json(await listAnalyses(req.query));

@@ -19,9 +19,13 @@
 // mediaType chega de dois jeitos: tipo do WhatsApp (conversation,
 // locationMessage, ...) ou, em midia, o prefixo do mimetype (image, audio,
 // video, application). Os dois sao tratados.
+//
+// Antes de mapear, a leitura passa cada mensagem por isWithinAnalysisScope: a
+// IA so le os trechos com atendente vinculado em fila monitorada.
 
 const { foldText, maskText } = require("../pii-mask");
-const { normalizeAttendantName } = require("../attendant-filter");
+const { attendantKey, normalizeAttendantName } = require("../attendant-filter");
+const { normalizeQueueName } = require("../queue-filter");
 const { toZonedIso } = require("../time-zone");
 
 const MAX_BODY_LENGTH = 4000;
@@ -59,8 +63,10 @@ const MEDIA_MARKERS = {
   video: "[VIDEO]"
 };
 
-// timeline: leituras do ticket ({ at: ms, attendant }) em ordem crescente, para
-// saber quem estava com o ticket no momento da mensagem.
+// timeline: trechos do ticket tirados das leituras ({ at, until, attendant,
+// queue }, em ms e em ordem crescente: de at ate until o ticket esteve com
+// aquele atendente naquela fila), para saber quem estava com o ticket no
+// momento da mensagem.
 function mapApiMessage(apiMessage, { ticketId, clientName = "", attendantNames = [], timeline = [], collectedAt } = {}) {
   const id = cleanText(apiMessage?.id, MAX_ID_LENGTH);
   const created = parseDate(apiMessage?.createdAt);
@@ -75,7 +81,7 @@ function mapApiMessage(apiMessage, { ticketId, clientName = "", attendantNames =
   }
 
   const mediaType = cleanText(apiMessage?.mediaType, MAX_MEDIA_TYPE_LENGTH);
-  const fromMe = apiMessage?.fromMe === true || apiMessage?.fromMe === 1 || apiMessage?.fromMe === "true";
+  const fromMe = isFromMe(apiMessage);
   let body = String(apiMessage?.body ?? "").replace(/\r\n/g, "\n");
 
   const kind = classifyMessage(mediaType, body);
@@ -156,28 +162,97 @@ function resolveSenderKind({ fromMe, apiMessage, signature, moment }) {
   return "EMPRESA";
 }
 
-// Quem estava com o ticket quando a mensagem saiu: a leitura mais proxima
-// ANTES dela. Sem leitura anterior (a mensagem e mais velha que a primeira
-// coleta do ticket), o atendente vem da primeira leitura depois, mas o momento
+// Quem estava com o ticket quando a mensagem saiu: o trecho que comecou mais
+// perto ANTES dela. Sem trecho anterior (a mensagem e mais velha que a primeira
+// coleta do ticket), o atendente vem do primeiro trecho depois, mas o momento
 // fica "desconhecido" — e ai a mensagem nunca e classificada como AUTOMATICA.
 function resolveAttendantAt(timeline, createdMs) {
-  let known = false;
-  let attendant = "";
+  let reading = null;
 
-  for (const reading of Array.isArray(timeline) ? timeline : []) {
-    if (reading.at <= createdMs) {
-      known = true;
-      attendant = reading.attendant || "";
+  for (const entry of Array.isArray(timeline) ? timeline : []) {
+    if (entry.at <= createdMs) {
+      reading = entry;
     } else {
       break;
     }
   }
 
-  if (!known && timeline?.length) {
-    attendant = timeline[0].attendant || "";
+  if (!reading) {
+    return { known: false, attendant: timeline?.[0]?.attendant || "", queue: "", until: null };
+  }
+  return { known: true, attendant: reading.attendant || "", queue: reading.queue || "", until: reading.until ?? reading.at };
+}
+
+// Recorte da analise por IA. scope vem de createAnalysisScope. Entra a mensagem
+// (do cliente ou da empresa) enviada enquanto o ticket estava numa fila
+// monitorada com um atendente vinculado. Na duvida, fica de fora:
+//   1. precisa haver um trecho antes da mensagem, e ela nao pode ter saido mais
+//      de readingValidityMs depois da ultima leitura dele — passando disso o
+//      ticket tinha saido da listagem (fechado ou em outra fila);
+//   2. o trecho precisa ser de fila monitorada;
+//   3. a fila da propria mensagem (queueId/queue, quando a instancia manda)
+//      pega a transferencia que aconteceu entre duas coletas. Fila ausente ou
+//      nula nao exclui: vale a do trecho;
+//   4. mensagem assinada precisa ser de atendente vinculado. Sem assinatura, o
+//      atendente do trecho precisa ser vinculado — bot e fila de espera ficam
+//      de fora. A assinatura de um vinculado so supre trecho SEM atendente (ele
+//      aceitou o ticket entre duas coletas), nunca o de outra pessoa.
+function isWithinAnalysisScope(apiMessage, { timeline = [], scope } = {}) {
+  const created = parseDate(apiMessage?.createdAt);
+  if (!created || !scope) {
+    return false;
   }
 
-  return { known, attendant };
+  const moment = resolveAttendantAt(timeline, created.getTime());
+  if (!moment.known || created.getTime() - moment.until > scope.readingValidityMs) {
+    return false;
+  }
+  if (!normalizeQueueName(moment.queue) || !isMessageQueueAllowed(apiMessage, scope.queueIds)) {
+    return false;
+  }
+
+  const author = signatureAuthor(apiMessage);
+  if (author) {
+    return scope.isLinked(author) && (!moment.attendant || scope.isLinked(moment.attendant));
+  }
+  return scope.isLinked(moment.attendant);
+}
+
+// attendants: nomes dos tokens ATENDENTE ativos. queueIds: ids das filas
+// monitoradas no MTalk (vazio quando a coleta nao conseguiu listar as filas).
+function createAnalysisScope({ attendants = [], queueIds = [], readingValidityMs }) {
+  const keys = new Set(attendants.map(attendantKey).filter(Boolean));
+  return {
+    attendants: [...attendants],
+    queueIds: new Set([...queueIds].map(Number).filter(Number.isFinite)),
+    readingValidityMs,
+    isLinked: (name) => keys.has(attendantKey(name))
+  };
+}
+
+function isMessageQueueAllowed(apiMessage, queueIds) {
+  const name = cleanText(apiMessage?.queue?.name, 120);
+  if (name) {
+    return Boolean(normalizeQueueName(name));
+  }
+
+  const id = apiMessage?.queueId ?? apiMessage?.queue?.id;
+  if (id === undefined || id === null || id === "" || !queueIds?.size) {
+    return true;
+  }
+  return queueIds.has(Number(id));
+}
+
+function signatureAuthor(apiMessage) {
+  if (!isFromMe(apiMessage)) {
+    return "";
+  }
+  const match = SIGNATURE_RE.exec(String(apiMessage?.body ?? "").replace(/\r\n/g, "\n"));
+  return match ? match[1].trim() : "";
+}
+
+function isFromMe(apiMessage) {
+  return apiMessage?.fromMe === true || apiMessage?.fromMe === 1 || apiMessage?.fromMe === "true";
 }
 
 function buildContent(kind, body, maskOptions) {
@@ -247,7 +322,9 @@ function cleanText(value, maxLength) {
 
 module.exports = {
   classifyMessage,
+  createAnalysisScope,
   detectFlags,
+  isWithinAnalysisScope,
   mapApiMessage,
   resolveAttendantAt
 };

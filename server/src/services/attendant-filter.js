@@ -34,6 +34,13 @@ function normalizeAttendantName(value) {
   return text;
 }
 
+// Chave para comparar o mesmo atendente vindo de lugares diferentes (token,
+// leitura de tickets, assinatura da mensagem): canonico e em maiusculas, como o
+// recorte dos alertas (scopeTickets no coletor).
+function attendantKey(value) {
+  return normalizeAttendantName(value).toUpperCase();
+}
+
 // Nomes conhecidos (canonicos e apelidos). O mascaramento de mensagens
 // (pii-mask.js) troca qualquer um deles por [ATENDENTE].
 function listKnownAttendantNames() {
@@ -66,6 +73,7 @@ function cleanText(value) {
 }
 
 module.exports = {
+  attendantKey,
   listCompanyTokens,
   listKnownAttendantNames,
   normalizeAttendantName

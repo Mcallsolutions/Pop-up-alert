@@ -109,8 +109,9 @@ async function collectFromMtalk({ persist = true } = {}) {
       console.warn("[DB] Falha ao apagar leituras antigas:", error.message);
     });
     // Leitura das mensagens e analise por IA: desligadas por padrao, com trava
-    // e teto proprios, e nunca aguardadas aqui.
-    startAttendanceWork({ tickets, collectedAt, now, diagnostics });
+    // e teto proprios, e nunca aguardadas aqui. Os ids das filas monitoradas
+    // conferem a fila de cada mensagem.
+    startAttendanceWork({ tickets, collectedAt, now, diagnostics, queueIds: queues.ids });
   }
 
   lastCollection = { collectedAt, thresholdMinutes: threshold, totals, diagnostics, tickets };

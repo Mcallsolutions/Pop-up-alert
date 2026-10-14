@@ -15,14 +15,22 @@
 // (minUpdatedAt). Sem cursor, comeca pela pagina mais recente e nunca volta
 // alem de AI_ANALYSIS_MAX_MESSAGES mensagens.
 //
+// Recorte: so e gravada a mensagem enviada enquanto o ticket estava numa fila
+// monitorada (queue-filter.js) com um atendente vinculado — o de um token
+// ATENDENTE ativo (token.service.js). A regra por mensagem fica em
+// isWithinAnalysisScope (mtalk.messages.js); o que fica de fora nem chega ao
+// banco. E ticket sem trecho vinculado desde o cursor nem gasta GET.
+//
 // Cada mensagem e mascarada ANTES de tocar o banco (mtalk.messages.js). Upsert
 // por id: edicao e exclusao atualizam a linha.
 
 const { getAttendanceConfig, getMtalkConfig } = require("../../config/monitoring");
 const { getDatabase } = require("../../database");
+const { normalizeQueueName } = require("../queue-filter");
 const { toZonedIso } = require("../time-zone");
+const { listLinkedAttendants } = require("../token.service");
 const { listMessages } = require("./mtalk.client");
-const { mapApiMessage } = require("./mtalk.messages");
+const { createAnalysisScope, isWithinAnalysisScope, mapApiMessage } = require("./mtalk.messages");
 
 const ENDPOINT = "GET /messages/{ticketId}";
 // Atendentes das leituras recentes, para o mascaramento trocar o nome deles
@@ -32,10 +40,17 @@ const ATTENDANT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const MAX_ATTENDANT_NAMES = 500;
 // Ticket lido pela ultima vez ha menos que isso ainda esta em atendimento.
 const RECENT_READING_MS = 10 * 60 * 1000;
+// Quanto tempo uma leitura vale para as mensagens seguintes: 3 coletas, no
+// minimo 3 minutos (a mesma conta que tira o alerta velho do pop-up). Depois
+// disso sem leitura nova, o ticket saiu da listagem.
+const MIN_READING_VALIDITY_MS = 3 * 60 * 1000;
 
 let running = null;
 let lastSync = null;
 let attendantNames = { names: new Set(), expiresAt: 0 };
+// Ids das filas monitoradas, da ultima coleta que conseguiu listar as filas.
+// A leitura manual do painel usa os mesmos.
+let monitoredQueueIds = [];
 
 const UPSERT_MESSAGE_SQL = `
   INSERT INTO messages (
@@ -55,10 +70,14 @@ const UPSERT_MESSAGE_SQL = `
 
 // Chamado pela coleta, sem await. O contador do endpoint entra no diagnostico
 // antes do primeiro await: a coleta que acabou de terminar ja mostra a chave.
-function syncMessagesAfterCollection({ tickets = [], collectedAt, now = new Date(), diagnostics = null } = {}) {
+function syncMessagesAfterCollection({ tickets = [], collectedAt, now = new Date(), diagnostics = null, queueIds = [] } = {}) {
   const config = getAttendanceConfig();
   if (!config.enabled) {
     return Promise.resolve(null);
+  }
+
+  if (queueIds.length) {
+    monitoredQueueIds = [...queueIds];
   }
 
   if (diagnostics?.requisicoesPorEndpoint) {
@@ -76,12 +95,13 @@ function syncMessagesAfterCollection({ tickets = [], collectedAt, now = new Date
 }
 
 async function runSync({ tickets, collectedAt, now, diagnostics, config }) {
-  const stats = { inicio: new Date().toISOString(), requisicoes: 0, ticketsLidos: 0, mensagensGravadas: 0 };
+  const stats = newStats(new Date());
   const budget = createBudget(config.maxMessageFetches, stats, diagnostics);
 
   try {
     const database = await getDatabase();
     const mtalkConfig = getMtalkConfig();
+    const scope = await loadAnalysisScope(mtalkConfig);
     const current = tickets.filter((ticket) => /^\d+$/.test(String(ticket?.externalTicketId || "")));
     rememberAttendants(current.map((ticket) => ticket.attendant));
 
@@ -97,42 +117,65 @@ async function runSync({ tickets, collectedAt, now, diagnostics, config }) {
     const changed = current
       .filter((ticket) => ticketChanged(ticket, syncRows.get(String(ticket.externalTicketId))))
       .sort((a, b) => Date.parse(a.lastMessageAt || 0) - Date.parse(b.lastMessageAt || 0));
+    const linkedAt = await loadLastLinkedReadings(
+      database,
+      [...gone.map((row) => row.ticketId), ...changed.map((ticket) => ticket.externalTicketId)],
+      scope,
+      now.getTime() - ATTENDANT_LOOKBACK_MS
+    );
     const names = await loadAttendantNames(database, now);
 
     // 1. Busca final de quem saiu da listagem.
     for (const row of gone) {
-      if (!budget.left()) break;
-      const info = await loadLatestReading(database, row.ticketId);
-      const result = await fetchAndStore({
-        database,
-        mtalkConfig,
-        config,
-        ticketId: row.ticketId,
-        cursor: row.cursor,
-        clientName: info?.clientName || "",
-        names,
-        budget,
-        collectedAt,
-        stats
-      });
-      // Busca cortada pelo teto fica para a proxima coleta; erro do MTalk
-      // naquele ticket fecha assim mesmo, para nao gastar o teto em loop.
-      if (!result.complete && result.ok) break;
+      let cursor = null;
+      // Sem trecho vinculado desde o cursor nao ha o que ler: fecha sem GET.
+      if (hasScopedNews(linkedAt.get(String(row.ticketId)), row.cursor, scope)) {
+        if (!budget.left()) continue;
+        const info = await loadLatestReading(database, row.ticketId);
+        const result = await fetchAndStore({
+          database,
+          mtalkConfig,
+          config,
+          scope,
+          ticketId: row.ticketId,
+          cursor: row.cursor,
+          clientName: info?.clientName || "",
+          names,
+          budget,
+          collectedAt,
+          stats
+        });
+        // Busca cortada pelo teto fica para a proxima coleta; erro do MTalk
+        // naquele ticket fecha assim mesmo, para nao gastar o teto em loop.
+        if (!result.complete && result.ok) continue;
+        cursor = result.cursor;
+      } else {
+        stats.ticketsForaDoRecorte += 1;
+      }
       await database
         .prepare("UPDATE message_sync SET closed_at = ?, last_message_updated_at = COALESCE(?, last_message_updated_at) WHERE ticket_id = ?")
-        .run(collectedAt, result.cursor, row.ticketId);
+        .run(collectedAt, cursor, row.ticketId);
     }
 
     // 2. Tickets que mudaram, do mais antigo para o mais novo.
     for (const ticket of changed) {
-      if (!budget.left()) break;
       const ticketId = String(ticket.externalTicketId);
+      const cursor = syncRows.get(ticketId)?.cursor || null;
+      // Fila de espera, atendente sem token: nao gasta GET. A mudanca continua
+      // pendente e volta a ser avaliada na proxima coleta — quando um
+      // atendente vinculado pegar o ticket, a busca sai do mesmo cursor.
+      if (!hasScopedNews(linkedAt.get(ticketId), cursor, scope)) {
+        stats.ticketsForaDoRecorte += 1;
+        continue;
+      }
+      if (!budget.left()) break;
       const result = await fetchAndStore({
         database,
         mtalkConfig,
         config,
+        scope,
         ticketId,
-        cursor: syncRows.get(ticketId)?.cursor || null,
+        cursor,
         clientName: ticket.clientName || "",
         names,
         budget,
@@ -161,9 +204,10 @@ async function runSync({ tickets, collectedAt, now, diagnostics, config }) {
 async function syncTicketMessages(ticketId, { now = new Date() } = {}) {
   const config = getAttendanceConfig();
   const database = await getDatabase();
+  const mtalkConfig = getMtalkConfig();
   const id = String(ticketId);
   const collectedAt = toZonedIso(now);
-  const stats = { inicio: now.toISOString(), requisicoes: 0, ticketsLidos: 0, mensagensGravadas: 0 };
+  const stats = newStats(now);
   const budget = createBudget(config.maxMessageFetches, stats, null);
 
   const syncRow = await database
@@ -171,21 +215,30 @@ async function syncTicketMessages(ticketId, { now = new Date() } = {}) {
     .get(id);
   const info = await loadLatestReading(database, id);
   const names = await loadAttendantNames(database, now);
+  // Sem limite de idade: o painel pode pedir um ticket antigo.
+  const scope = await loadAnalysisScope(mtalkConfig);
+  const linkedAt = await loadLastLinkedReadings(database, [id], scope, null);
 
-  const result = budget.left()
-    ? await fetchAndStore({
-        database,
-        mtalkConfig: getMtalkConfig(),
-        config,
-        ticketId: id,
-        cursor: syncRow?.cursor || null,
-        clientName: info?.clientName || "",
-        names,
-        budget,
-        collectedAt,
-        stats
-      })
-    : { ok: false, cursor: null };
+  let result = { ok: true, cursor: null };
+  if (!hasScopedNews(linkedAt.get(id), syncRow?.cursor, scope)) {
+    stats.ticketsForaDoRecorte += 1;
+  } else if (!budget.left()) {
+    result = { ok: false, cursor: null };
+  } else {
+    result = await fetchAndStore({
+      database,
+      mtalkConfig,
+      config,
+      scope,
+      ticketId: id,
+      cursor: syncRow?.cursor || null,
+      clientName: info?.clientName || "",
+      names,
+      budget,
+      collectedAt,
+      stats
+    });
+  }
 
   if (syncRow) {
     await database
@@ -203,7 +256,7 @@ async function syncTicketMessages(ticketId, { now = new Date() } = {}) {
   return { ...stats, ok: result.ok };
 }
 
-async function fetchAndStore({ database, mtalkConfig, config, ticketId, cursor, clientName, names, budget, collectedAt, stats }) {
+async function fetchAndStore({ database, mtalkConfig, config, scope, ticketId, cursor, clientName, names, budget, collectedAt, stats }) {
   const collected = [];
   let nextId = null;
   let complete = true;
@@ -236,22 +289,27 @@ async function fetchAndStore({ database, mtalkConfig, config, ticketId, cursor, 
   }
 
   stats.ticketsLidos += 1;
-  const saved = await storeMessages(database, { ticketId, apiMessages: collected, clientName, names, collectedAt });
+  const saved = await storeMessages(database, { ticketId, apiMessages: collected, clientName, names, collectedAt, scope });
   stats.mensagensGravadas += saved.count;
+  stats.mensagensForaDoRecorte += saved.outOfScope;
 
   return { ok: true, complete, cursor: saved.maxUpdatedMs ? toZonedIso(new Date(saved.maxUpdatedMs)) : null };
 }
 
-async function storeMessages(database, { ticketId, apiMessages, clientName, names, collectedAt }) {
+async function storeMessages(database, { ticketId, apiMessages, clientName, names, collectedAt, scope }) {
   if (!apiMessages.length) {
-    return { count: 0, maxUpdatedMs: 0 };
+    return { count: 0, outOfScope: 0, maxUpdatedMs: 0 };
   }
 
   const times = apiMessages.map((message) => Date.parse(message?.createdAt)).filter(Number.isFinite);
-  const timeline = times.length ? await loadAttendantTimeline(database, ticketId, Math.min(...times), Math.max(...times)) : [];
+  const timeline = times.length
+    ? await loadAttendantTimeline(database, ticketId, Math.min(...times), Math.max(...times), scope.readingValidityMs)
+    : [];
   const attendantList = [...names];
+  // O que fica fora do recorte nem e mascarado: nao toca o banco.
+  const inScope = apiMessages.filter((message) => isWithinAnalysisScope(message, { timeline, scope }));
 
-  const rows = apiMessages
+  const rows = inScope
     .map((message) => mapApiMessage(message, { ticketId, clientName, attendantNames: attendantList, timeline, collectedAt }))
     .filter(Boolean)
     .sort((a, b) => a.createdMs - b.createdMs);
@@ -279,13 +337,17 @@ async function storeMessages(database, { ticketId, apiMessages, clientName, name
     }
   });
 
-  // O cursor considera tudo o que veio (inclusive reacao e historico
-  // descartados): o que ja foi visto nao precisa voltar.
+  // O cursor considera tudo o que veio (inclusive reacao, historico e o que
+  // ficou fora do recorte): o que ja foi visto nao precisa voltar.
   const updatedTimes = apiMessages
     .map((message) => Date.parse(message?.updatedAt || message?.createdAt))
     .filter(Number.isFinite);
 
-  return { count: rows.length, maxUpdatedMs: updatedTimes.length ? Math.max(...updatedTimes) : 0 };
+  return {
+    count: rows.length,
+    outOfScope: apiMessages.length - inScope.length,
+    maxUpdatedMs: updatedTimes.length ? Math.max(...updatedTimes) : 0
+  };
 }
 
 // Marca os tickets da coleta como vistos agora (e reabre quem tinha fechado) e
@@ -329,16 +391,18 @@ function ticketChanged(ticket, syncRow) {
   return Boolean(current) && current !== syncRow.ticketUpdatedAt;
 }
 
-// Leituras do ticket em volta das mensagens: a ultima antes da primeira
-// mensagem e todas ate a ultima. As linhas repetidas (mesmo atendente) viram
-// uma so.
-async function loadAttendantTimeline(database, ticketId, fromMs, toMs) {
+// Trechos do ticket em volta das mensagens, a partir das leituras: a ultima
+// antes da primeira mensagem e todas ate a ultima. Leituras seguidas com o
+// mesmo atendente e a mesma fila viram um trecho so ({ at, until }) — desde que
+// a distancia entre elas nao passe de gapMs: um buraco maior e o ticket fora
+// da listagem (fechado, em outra fila), e ai comeca outro trecho.
+async function loadAttendantTimeline(database, ticketId, fromMs, toMs, gapMs) {
   const from = toZonedIso(new Date(fromMs));
   const to = toZonedIso(new Date(toMs));
 
   const before = await database
     .prepare(
-      `SELECT collected_at AS at, trim(coalesce(attendant, '')) AS attendant
+      `SELECT collected_at AS at, trim(coalesce(attendant, '')) AS attendant, coalesce(queue_name, '') AS queue
        FROM tickets
        WHERE external_ticket_id = ? AND collected_at <= ?
        ORDER BY collected_at DESC, id DESC
@@ -347,7 +411,7 @@ async function loadAttendantTimeline(database, ticketId, fromMs, toMs) {
     .get(ticketId, from);
   const during = await database
     .prepare(
-      `SELECT collected_at AS at, trim(coalesce(attendant, '')) AS attendant
+      `SELECT collected_at AS at, trim(coalesce(attendant, '')) AS attendant, coalesce(queue_name, '') AS queue
        FROM tickets
        WHERE external_ticket_id = ? AND collected_at > ? AND collected_at <= ?
        ORDER BY collected_at, id`
@@ -358,11 +422,79 @@ async function loadAttendantTimeline(database, ticketId, fromMs, toMs) {
   for (const row of before ? [before, ...during] : during) {
     const at = Date.parse(row.at);
     if (!Number.isFinite(at)) continue;
-    if (!timeline.length || timeline[timeline.length - 1].attendant !== row.attendant) {
-      timeline.push({ at, attendant: row.attendant });
+    const last = timeline[timeline.length - 1];
+    if (last && last.attendant === row.attendant && last.queue === row.queue && at - last.until <= gapMs) {
+      last.until = at;
+    } else {
+      timeline.push({ at, until: at, attendant: row.attendant, queue: row.queue });
     }
   }
   return timeline;
+}
+
+// Ultima leitura (ms) de cada ticket com atendente vinculado numa fila
+// monitorada, desde sinceMs (null = sem limite). Uma consulta so por coleta.
+async function loadLastLinkedReadings(database, ticketIds, scope, sinceMs) {
+  const ids = [...new Set(ticketIds.map(String))];
+  const latest = new Map();
+  if (!ids.length || !scope.attendants.length) {
+    return latest;
+  }
+
+  const params = [...ids];
+  let since = "";
+  if (sinceMs !== null && sinceMs !== undefined) {
+    since = "AND collected_at >= ?";
+    params.push(toZonedIso(new Date(sinceMs)));
+  }
+
+  const rows = await database
+    .prepare(
+      `SELECT external_ticket_id AS "ticketId", trim(attendant) AS attendant, queue_name AS queue, MAX(collected_at) AS at
+       FROM tickets
+       WHERE external_ticket_id IN (${ids.map(() => "?").join(", ")})
+         AND trim(coalesce(attendant, '')) <> '' ${since}
+       GROUP BY external_ticket_id, trim(attendant), queue_name`
+    )
+    .all(...params);
+
+  for (const row of rows) {
+    const at = Date.parse(row.at);
+    if (!Number.isFinite(at) || !scope.isLinked(row.attendant) || !normalizeQueueName(row.queue)) continue;
+    const id = String(row.ticketId);
+    latest.set(id, Math.max(latest.get(id) || 0, at));
+  }
+  return latest;
+}
+
+// Pode haver mensagem do recorte depois do cursor? So se o ticket esteve com um
+// atendente vinculado ate readingValidityMs antes dele (a ultima leitura do
+// trecho ainda cobre as mensagens logo depois).
+function hasScopedNews(lastLinkedAt, cursor, scope) {
+  if (!lastLinkedAt) {
+    return false;
+  }
+  const cursorMs = Date.parse(cursor || "");
+  return !Number.isFinite(cursorMs) || lastLinkedAt + scope.readingValidityMs >= cursorMs;
+}
+
+async function loadAnalysisScope(mtalkConfig) {
+  return createAnalysisScope({
+    attendants: await listLinkedAttendants(),
+    queueIds: monitoredQueueIds,
+    readingValidityMs: Math.max(mtalkConfig.collectIntervalMs * 3, MIN_READING_VALIDITY_MS)
+  });
+}
+
+function newStats(start) {
+  return {
+    inicio: start.toISOString(),
+    requisicoes: 0,
+    ticketsLidos: 0,
+    ticketsForaDoRecorte: 0,
+    mensagensGravadas: 0,
+    mensagensForaDoRecorte: 0
+  };
 }
 
 async function loadLatestReading(database, ticketId) {

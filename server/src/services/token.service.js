@@ -19,7 +19,7 @@
 
 const crypto = require("node:crypto");
 const { getDatabase } = require("../database");
-const { normalizeAttendantName } = require("./attendant-filter");
+const { attendantKey, normalizeAttendantName } = require("./attendant-filter");
 
 const TOKEN_PREFIX = "mca_";
 const TOKEN_BYTES = 32;
@@ -114,6 +114,35 @@ async function getTokenById(id) {
     .get(Number(id));
 
   return row ? normalizeTokenRow(row) : null;
+}
+
+// Atendentes vinculados: o atendente de cada token ATENDENTE ativo. A analise
+// de atendimento por IA so le as conversas deles (mtalk.message-sync.js), entao
+// emitir ou revogar um token muda o recorte a partir da proxima coleta.
+async function listLinkedAttendants() {
+  const database = await getDatabase();
+  const rows = await database
+    .prepare(
+      `SELECT trim(attendant) AS attendant
+       FROM api_tokens
+       WHERE is_active = 1 AND role = 'ATENDENTE' AND trim(coalesce(attendant, '')) <> ''
+       ORDER BY trim(attendant), id`
+    )
+    .all();
+
+  // Dois tokens da mesma pessoa ("Stephanie - notebook", "Stephanie - casa")
+  // sao um atendente so.
+  const seen = new Set();
+  return rows
+    .map((row) => row.attendant)
+    .filter((attendant) => {
+      const key = attendantKey(attendant);
+      if (!key || seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
 }
 
 // Revogar nao apaga a linha: a lista continua mostrando quem teve acesso.
@@ -266,6 +295,7 @@ module.exports = {
   getTokenById,
   isOpenMode,
   isOpenModeAllowed,
+  listLinkedAttendants,
   listTokens,
   openModeIdentity,
   revokeToken
