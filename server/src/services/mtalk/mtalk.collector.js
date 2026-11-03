@@ -23,6 +23,7 @@ const { purgeOldReadingsIfDue } = require("../retention.service");
 const { startAttendanceWork } = require("../attendance-analysis.service");
 const { saveSnapshot } = require("../ticket.service");
 const { toZonedIso } = require("../time-zone");
+const { startWhatsappAlerts } = require("../whatsapp-alerts.service");
 const { describeSession, getContact, listQueues, listTags, listTickets } = require("./mtalk.client");
 const { dedupeApiTickets, mapApiTicket } = require("./mtalk.mapper");
 const {
@@ -112,6 +113,13 @@ async function collectFromMtalk({ persist = true } = {}) {
     // e teto proprios, e nunca aguardadas aqui. Os ids das filas monitoradas
     // conferem a fila de cada mensagem.
     startAttendanceWork({ tickets, collectedAt, now, diagnostics, queueIds: queues.ids });
+    // Aviso no WhatsApp dos clientes que acabaram de passar do limite
+    // (desligado por padrao). Mesma lista do pop-up, sem o recorte por atendente.
+    startWhatsappAlerts({
+      tickets: listInactiveTickets(tickets, threshold).map(toAlertItem),
+      thresholdMinutes: threshold,
+      now
+    });
   }
 
   lastCollection = { collectedAt, thresholdMinutes: threshold, totals, diagnostics, tickets };
@@ -218,9 +226,7 @@ function getCurrentAlerts({ attendant = null } = {}) {
   // Ticket aguardando na fila nao tem a quem cobrar a TAG, mas continua no
   // alerta de inatividade — mesma regra dos relatorios.
   const missingTag = identificados.filter((ticket) => ticket.tagStatus === "SEM_TAG" && hasResponsible(ticket));
-  const inactive = identificados
-    .filter((ticket) => Number(ticket.inactivityMinutes || 0) > threshold)
-    .sort((a, b) => Number(b.inactivityMinutes || 0) - Number(a.inactivityMinutes || 0));
+  const inactive = listInactiveTickets(tickets, threshold);
   const ageMs = collection ? Date.now() - new Date(collection.collectedAt).getTime() : null;
   // Leitura velha nao pode continuar gerando alerta como se fosse o agora.
   const staleAfterMs = Math.max(config.collectIntervalMs * 3, 3 * 60 * 1000);
@@ -243,6 +249,15 @@ function getCurrentAlerts({ attendant = null } = {}) {
       assignedTicketIds: inactive.filter(hasResponsible).map((ticket) => ticket.externalTicketId)
     }
   };
+}
+
+// Clientes identificados acima do limite, do mais parado para o menos. Mesma
+// lista para o pop-up e para o aviso no WhatsApp.
+function listInactiveTickets(tickets, threshold) {
+  return tickets
+    .filter((ticket) => String(ticket.clientName || "").trim())
+    .filter((ticket) => Number(ticket.inactivityMinutes || 0) > threshold)
+    .sort((a, b) => Number(b.inactivityMinutes || 0) - Number(a.inactivityMinutes || 0));
 }
 
 function toAlertItem(ticket) {

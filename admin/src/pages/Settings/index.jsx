@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Save } from "lucide-react";
+import { MessageCircle, RefreshCw, Save } from "lucide-react";
 import { api, getApiBaseUrl, setApiBaseUrl } from "../../services/api";
 import { formatDateTime } from "../../services/datetime";
 import TokenManager from "../../components/TokenManager";
@@ -12,6 +12,7 @@ export default function SettingsPage() {
   const [mtalkError, setMtalkError] = useState("");
   const [collecting, setCollecting] = useState(false);
   const [attendance, setAttendance] = useState(null);
+  const [whatsapp, setWhatsapp] = useState(null);
 
   async function loadStatus() {
     try {
@@ -25,6 +26,10 @@ export default function SettingsPage() {
       .attendanceStatus()
       .then(setAttendance)
       .catch(() => setAttendance(null));
+    api
+      .whatsappStatus()
+      .then(setWhatsapp)
+      .catch(() => setWhatsapp(null));
   }
 
   useEffect(() => {
@@ -77,7 +82,7 @@ export default function SettingsPage() {
           {!mtalk ? (
             <p className="notice">{mtalkError ? "Status indisponivel." : "Carregando..."}</p>
           ) : (
-            <table>
+            <table className="kv-table">
               <tbody>
                 <tr>
                   <td>Token</td>
@@ -147,6 +152,8 @@ export default function SettingsPage() {
 
       <AttendanceStatus status={attendance} />
 
+      <WhatsappStatus status={whatsapp} onTested={loadStatus} />
+
       <ExtensionDownload />
 
       <TokenManager />
@@ -173,6 +180,116 @@ export default function SettingsPage() {
   );
 }
 
+// Alertas de inatividade no WhatsApp: desligados por padrao (WHATSAPP_ALERTS).
+// Numero e chave ficam so no .env; aqui aparecem mascarados.
+function WhatsappStatus({ status, onTested }) {
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+
+  if (!status) {
+    return null;
+  }
+
+  async function sendTest() {
+    setTesting(true);
+    setError("");
+    setResult(null);
+    try {
+      setResult(await api.whatsappTest());
+    } catch (requestError) {
+      setError(requestError.message || "Falha ao enviar a mensagem de teste");
+    } finally {
+      setTesting(false);
+      onTested();
+    }
+  }
+
+  const ultimo = status.ultimoEnvio;
+  const podeTestar = status.ligado && !status.problema;
+
+  return (
+    <div className="table-panel">
+      <h3>Alertas no WhatsApp</h3>
+
+      {error ? <p className="notice error">{error}</p> : null}
+      {result ? (
+        <p className={result.ok ? "notice success" : "notice warning"}>
+          {result.ok
+            ? `Teste enviado para ${result.enviados} destinatario(s).`
+            : `Teste: ${result.enviados} enviado(s), ${result.falhas} com falha — ${result.destinatarios
+                .filter((item) => !item.ok)
+                .map((item) => `${item.destinatario}: ${item.erro}`)
+                .join("; ")}`}
+        </p>
+      ) : null}
+
+      <div className="table-scroll">
+        <table className="kv-table">
+          <tbody>
+            <tr>
+              <td>Situacao</td>
+              <td>
+                <span className={`badge${status.ligado && !status.problema ? " ativo" : ""}`}>
+                  {status.ligado ? (status.problema ? "ligado, com pendencia" : "ligado") : "desligado (WHATSAPP_ALERTS=0)"}
+                </span>
+                {status.problema ? ` — ${status.problema}` : ""}
+              </td>
+            </tr>
+            <tr>
+              <td>Provedor</td>
+              <td>{status.provedor || "-"}</td>
+            </tr>
+            <tr>
+              <td>Destinatarios</td>
+              <td>{status.destinatarios?.length ? status.destinatarios.join(", ") : "nenhum (WHATSAPP_RECIPIENTS)"}</td>
+            </tr>
+            <tr>
+              <td>Quando avisa</td>
+              <td>
+                uma vez quando o cliente passa do limite de inatividade
+                {status.lembreteMinutos ? `, com lembrete a cada ${status.lembreteMinutos} min enquanto continuar parado` : ""}
+                {status.incluiNomeCliente ? " — com o nome do cliente" : " — sem o nome do cliente"}
+              </td>
+            </tr>
+            <tr>
+              <td>Limite da hora</td>
+              <td>
+                {status.orcamentoHora?.usadas ?? 0} de {status.orcamentoHora?.limite ?? 0} mensagem(ns) por destinatario
+              </td>
+            </tr>
+            <tr>
+              <td>Ultimo envio</td>
+              <td>
+                {ultimo?.em
+                  ? `${formatDateTime(ultimo.em)} — ${ultimo.ok ? "ok" : `falhou: ${ultimo.erro}`}${ultimo.tickets ? `, ${ultimo.tickets} ticket(s)` : ""}${ultimo.semOrcamento ? " (limite da hora atingido depois)" : ""}`
+                  : ultimo?.semOrcamento
+                    ? "limite da hora atingido"
+                    : "-"}
+                {status.aguardandoAposFalhaAte ? ` — nova tentativa apos ${formatDateTime(status.aguardandoAposFalhaAte)}` : ""}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="extension-download">
+        <div className="extension-info">
+          <MessageCircle aria-hidden="true" size={18} />
+          <div>
+            <strong>Mensagem de teste</strong>
+            <span>Manda uma mensagem curta para todos os destinatarios configurados.</span>
+          </div>
+        </div>
+        <button className="secondary-button" type="button" onClick={sendTest} disabled={testing || !podeTestar}>
+          <MessageCircle aria-hidden="true" size={17} />
+          {testing ? "Enviando..." : "Enviar teste"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Analise de atendimento por IA: desligada por padrao (AI_ATTENDANCE_ANALYSIS).
 function AttendanceStatus({ status }) {
   if (!status) {
@@ -188,7 +305,7 @@ function AttendanceStatus({ status }) {
     <div className="table-panel">
       <h3>Analise de atendimento (IA)</h3>
       <div className="table-scroll">
-        <table>
+        <table className="kv-table">
           <tbody>
             <tr>
               <td>Situacao</td>

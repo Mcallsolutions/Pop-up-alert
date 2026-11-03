@@ -108,6 +108,39 @@ function getAttendanceConfig() {
   };
 }
 
+// Alertas de inatividade no WhatsApp (whatsapp-alerts.service.js). Com
+// WHATSAPP_ALERTS diferente de "1" nada e enviado.
+const WHATSAPP_PROVIDERS = ["evolution", "waha", "callmebot"];
+const DEFAULT_WHATSAPP_MAX_PER_HOUR = 20;
+const DEFAULT_WHATSAPP_TIMEOUT_MS = 10000;
+
+function getWhatsappConfig() {
+  const provider = String(process.env.WHATSAPP_PROVIDER || "").trim().toLowerCase() || "evolution";
+
+  return {
+    enabled: String(process.env.WHATSAPP_ALERTS || "").trim() === "1",
+    provider: WHATSAPP_PROVIDERS.includes(provider) ? provider : "",
+    providerName: provider,
+    apiUrl: String(process.env.WHATSAPP_API_URL || "").trim().replace(/\/+$/, ""),
+    apiKey: String(process.env.WHATSAPP_API_KEY || "").trim(),
+    // Evolution: nome da instancia. WAHA: nome da sessao.
+    instance: String(process.env.WHATSAPP_INSTANCE || "").trim() || "default",
+    recipients: String(process.env.WHATSAPP_RECIPIENTS || "")
+      .split(/[,;\n]+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+    // O nome do cliente e dado pessoal e sai do servidor para o provedor:
+    // so vai na mensagem quando alguem liga de proposito.
+    includeClientName: String(process.env.WHATSAPP_INCLUDE_CLIENT_NAME || "").trim() === "1",
+    // Zero: um aviso por parada. Com valor, repete o aviso enquanto o ticket
+    // continuar parado.
+    reminderMinutes: readNonNegativeInteger(process.env.WHATSAPP_REMINDER_MINUTES, 0),
+    // Mensagens por destinatario por hora (aviso + teste). Zero pausa os avisos.
+    maxPerHour: readNonNegativeInteger(process.env.WHATSAPP_MAX_PER_HOUR, DEFAULT_WHATSAPP_MAX_PER_HOUR),
+    timeoutMs: readPositiveInteger(process.env.WHATSAPP_TIMEOUT_MS, DEFAULT_WHATSAPP_TIMEOUT_MS)
+  };
+}
+
 function readStatuses(value) {
   const statuses = String(value || "")
     .split(/[,\s]+/)
@@ -158,5 +191,6 @@ module.exports = {
   getInactivityThresholdMinutes,
   getMtalkConfig,
   getRetentionDays,
-  getTimeZone
+  getTimeZone,
+  getWhatsappConfig
 };
