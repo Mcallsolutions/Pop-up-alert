@@ -145,6 +145,13 @@ export const api = {
   },
   analyzeTicket(ticketId) {
     return request(`/api/attendance/tickets/${encodeURIComponent(ticketId)}/analyze`, { method: "POST" });
+  },
+  // Alertas de inatividade no WhatsApp (WHATSAPP_ALERTS=1 na API).
+  whatsappStatus() {
+    return request("/api/whatsapp/status");
+  },
+  whatsappTest() {
+    return request("/api/whatsapp/test", { method: "POST" });
   }
 };
 

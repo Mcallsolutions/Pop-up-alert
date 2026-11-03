@@ -292,12 +292,19 @@ IA (so ADMIN):
 Analise de atendimento (so painel; o token da extensao recebe `401` mesmo com perfil ADMIN):
 
 - `GET /api/attendance/status` — se esta ligada, orcamento usado na hora, mensagens no banco, ultima leitura e erro
-- `GET /api/attendance/analyses` — lista com os totais dos cards; filtros `day`, `startDate`, `endDate`,
-  `attendant`, `queue`, `company`, `clientName`, `riscoCancelamento`, `sentimentoCliente`, `notaMax` e `limit`
+- `GET /api/attendance/analyses` — 15 analises por pagina (`page`), com `paginacao` e os totais dos cards; filtros
+  `day`, `startDate`, `endDate`, `attendant`, `queue`, `company`, `clientName`, `riscoCancelamento`,
+  `sentimentoCliente`, `notaMax` e `desfecho` (`FINALIZADO` = resolvido, `TRANSFERIDO` = nao resolvido,
+  `EM_ANDAMENTO`)
 - `GET /api/attendance/analyses/:id` — a analise mais a transcricao **mascarada** da janela, com as evidencias marcadas
 - `GET /api/attendance/by-attendant` — nota media, % de sentimento negativo, 1a resposta media, riscos altos e orgao externo
 - `POST /api/attendance/tickets/:ticketId/analyze` — analise manual (le as mensagens do ticket antes). Com a
   analise desligada responde `403`
+
+Alertas no WhatsApp (so painel):
+
+- `GET /api/whatsapp/status` — se esta ligado, provedor, destinatarios **mascarados**, limite da hora e ultimo envio
+- `POST /api/whatsapp/test` — manda uma mensagem de teste para todos os destinatarios. Desligado responde `403`
 
 Diagnostico: `GET /health` (status da API e do banco).
 
@@ -478,6 +485,64 @@ nunca decide se o numero sai.
 - Usar `maiorEsperaClienteMinutos` para corrigir o alerta de inatividade: hoje ele mede **ticket parado** e nao
   separa "cliente aguardando" de "aguardando o cliente". Com as mensagens, da para alertar so o primeiro caso.
 
+## Alertas no WhatsApp
+
+O mesmo alerta de inatividade do pop-up pode chegar no WhatsApp da supervisao. Vem **desligado**
+(`WHATSAPP_ALERTS=0`): nada sai do servidor.
+
+Como funciona: depois de cada coleta gravada, o servidor separa os clientes acima de
+`INACTIVITY_THRESHOLD_MINUTES` (a mesma lista do pop-up, inclusive quem esta na fila sem atendente) e manda **uma
+mensagem por coleta** para cada destinatario, so com os tickets que **acabaram de passar** do limite. O mesmo ticket
+nao e avisado de novo enquanto continuar parado; quando ele volta a ter atividade, a proxima parada gera aviso novo.
+Com `WHATSAPP_REMINDER_MINUTES`, o aviso se repete enquanto o ticket continuar parado.
+
+A mensagem traz fila, atendente, conexao, tempo parado e o link do ticket no MTalk (que pede login). O **nome do
+cliente nao vai** por padrao: e dado pessoal saindo para o provedor do WhatsApp. Ligue com
+`WHATSAPP_INCLUDE_CLIENT_NAME=1` so se for necessario.
+
+### Provedores gratuitos
+
+| `WHATSAPP_PROVIDER` | O que e | Envia para |
+| --- | --- | --- |
+| `evolution` (padrao) | [Evolution API](https://doc.evolution-api.com/v2/) v2, codigo aberto, roda na propria VPS (Docker) com um numero conectado por QR Code | numero ou grupo |
+| `waha` | [WAHA](https://waha.devlike.pro/), mesma ideia, tambem auto-hospedado | numero ou grupo |
+| `callmebot` | [CallMeBot](https://www.callmebot.com/blog/free-api-whatsapp-messages/), servico gratuito so para **uso pessoal**: cada pessoa ativa o proprio numero e recebe uma apikey | so o proprio numero de cada um |
+
+Evolution e WAHA **nao sao a API oficial da Meta**: use um chip so para os alertas, nunca o numero de atendimento. O
+CallMeBot dispensa servidor, mas a ativacao de numeros novos depende de vaga no bot deles.
+
+### Como ligar
+
+```bash
+# no .env (Evolution API)
+WHATSAPP_ALERTS=1
+WHATSAPP_PROVIDER=evolution
+WHATSAPP_API_URL=http://127.0.0.1:8080
+WHATSAPP_API_KEY=<apikey da instancia>
+WHATSAPP_INSTANCE=mcall
+WHATSAPP_RECIPIENTS=5511999999999,120363000000000000@g.us
+```
+
+No CallMeBot, `WHATSAPP_RECIPIENTS` leva `telefone:apikey` de cada pessoa (`5511999999999:123456`) e
+`WHATSAPP_API_URL` fica vazio. Reinicie a API e use **Configuracoes > Alertas no WhatsApp > Enviar teste**.
+
+| Variavel | Padrao | Para que serve |
+| --- | --- | --- |
+| `WHATSAPP_ALERTS` | `0` | `1` liga os avisos |
+| `WHATSAPP_PROVIDER` | `evolution` | `evolution`, `waha` ou `callmebot` |
+| `WHATSAPP_API_URL` | — | endereco da Evolution API ou do WAHA |
+| `WHATSAPP_API_KEY` | — | apikey da instancia (Evolution) ou `X-Api-Key` (WAHA, opcional) |
+| `WHATSAPP_INSTANCE` | `default` | instancia (Evolution) ou sessao (WAHA) |
+| `WHATSAPP_RECIPIENTS` | — | numeros com DDI ou grupos `...@g.us`, separados por virgula |
+| `WHATSAPP_INCLUDE_CLIENT_NAME` | `0` | `1` poe o nome do cliente na mensagem |
+| `WHATSAPP_REMINDER_MINUTES` | `0` | repete o aviso a cada N min enquanto o ticket continuar parado |
+| `WHATSAPP_MAX_PER_HOUR` | `20` | mensagens por destinatario por hora (`0` pausa os avisos) |
+| `WHATSAPP_TIMEOUT_MS` | `10000` | tempo maximo de cada envio |
+
+Travas: uma falha no provedor nao marca o ticket como avisado e espera 5 min antes de tentar de novo; passou do
+limite da hora, os avisos esperam. O estado fica em memoria: reiniciar a API faz a primeira coleta mandar um aviso
+com os parados daquele momento. Numero e chave so aparecem mascarados no painel e no log.
+
 ## Horarios
 
 As tabelas mostram o **horario do ticket**: a ultima movimentacao no MTalk (`updatedAt`, gravado em `last_message_at`), que tambem e a origem do calculo de inatividade. O horario da coleta aparece so em "Ultima atualizacao" e "Ultima coleta".
@@ -507,6 +572,10 @@ atendentes ja estao numa mesma rede ou VPN, restringir o nginx por IP tira o pai
 Para os relatorios e alertas, o projeto coleta apenas: cliente, fila, atendente, conexao, horario, TAGs, status e
 identificadores do ticket. Ele nunca faz escrita no atendimento: o cliente HTTP do MTalk so tem `GET`. O historico de
 coletas e apagado depois de `RETENTION_DAYS` dias (padrao 90).
+
+**WhatsApp.** Com os [alertas no WhatsApp](#alertas-no-whatsapp) ligados, fila, atendente, conexao, tempo parado e o
+link do ticket saem do servidor para o provedor escolhido (e, no CallMeBot, para um servico de terceiro). O nome do
+cliente so vai com `WHATSAPP_INCLUDE_CLIENT_NAME=1`.
 
 **Conteudo das mensagens.** Com a [analise de atendimento](#analise-de-atendimento-ia) **desligada** (padrao), o
 sistema nao le mensagem nenhuma. **Ligada** (`AI_ATTENDANCE_ANALYSIS=1`), ele passa a ler `GET

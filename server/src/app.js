@@ -14,6 +14,7 @@ const reportRoutes = require("./routes/reports.routes");
 const aiRoutes = require("./routes/ai.routes");
 const attendanceRoutes = require("./routes/attendance.routes");
 const extensionRoutes = require("./routes/extension.routes");
+const whatsappRoutes = require("./routes/whatsapp.routes");
 
 // Painel em dev (Vite) e a extensao Chrome. Separe por virgula para liberar mais.
 const DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,chrome-extension://";
@@ -70,6 +71,8 @@ app.use("/api/attendance", requireDatabase, authenticatePanel, attendanceRoutes)
 // Download do .zip da extensao, pelo painel. O pacote sai da pasta
 // /extension, sem token nem .env dentro.
 app.use("/api/extension", requireDatabase, authenticatePanel, extensionRoutes);
+// Alertas de inatividade no WhatsApp: status e mensagem de teste. So painel.
+app.use("/api/whatsapp", requireDatabase, authenticatePanel, whatsappRoutes);
 
 serveAdminPanel(app);
 

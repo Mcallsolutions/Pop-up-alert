@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, Clock, Headset, LayoutDashboard, LogOut, Settings, Sparkles, Tags } from "lucide-react";
+import { BarChart3, Clock, Headset, LayoutDashboard, LogOut, Moon, Settings, Sparkles, Sun, Tags } from "lucide-react";
 import Dashboard from "./pages/Dashboard";
 import Inactivity from "./pages/Inactivity";
 import Reports from "./pages/Reports";
@@ -8,6 +8,7 @@ import AttendancePage from "./pages/Attendance";
 import SettingsPage from "./pages/Settings";
 import LoginGate from "./components/LoginGate";
 import { SESSION_EXPIRED_EVENT, api } from "./services/api";
+import { getEffectiveTheme, saveTheme } from "./services/theme";
 
 const views = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -26,6 +27,13 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [gateError, setGateError] = useState("");
   const [carregando, setCarregando] = useState(true);
+  const [theme, setTheme] = useState(getEffectiveTheme);
+
+  function alternarTema() {
+    const proximo = theme === "dark" ? "light" : "dark";
+    saveTheme(proximo);
+    setTheme(proximo);
+  }
 
   const carregarSessao = useCallback(async () => {
     try {
@@ -109,6 +117,7 @@ export default function App() {
                 key={item.id}
                 className={view === item.id ? "nav-button active" : "nav-button"}
                 type="button"
+                aria-current={view === item.id ? "page" : undefined}
                 onClick={() => setView(item.id)}
               >
                 <Icon aria-hidden="true" size={18} />
@@ -130,12 +139,37 @@ export default function App() {
             <p>Operacao de atendimento</p>
             <h1>{views.find((item) => item.id === view)?.label}</h1>
           </div>
-          <span>
-            {user.name} ({user.username})
-          </span>
+          <div className="topbar-actions">
+            <button
+              className="icon-button"
+              type="button"
+              onClick={alternarTema}
+              aria-label={theme === "dark" ? "Usar tema claro" : "Usar tema escuro"}
+              title={theme === "dark" ? "Tema claro" : "Tema escuro"}
+            >
+              {theme === "dark" ? <Sun aria-hidden="true" size={17} /> : <Moon aria-hidden="true" size={17} />}
+            </button>
+            <div className="user-chip">
+              <span className="avatar" aria-hidden="true">
+                {initials(user.name || user.username)}
+              </span>
+              <div>
+                <strong>{user.name}</strong>
+                <small>{user.username}</small>
+              </div>
+            </div>
+          </div>
         </header>
         {currentView}
       </main>
     </div>
   );
+}
+
+function initials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "?";
+  const first = parts[0][0] || "";
+  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
+  return `${first}${last}`.toUpperCase();
 }
