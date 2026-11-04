@@ -517,7 +517,7 @@ CallMeBot dispensa servidor, mas a ativacao de numeros novos depende de vaga no 
 # no .env (Evolution API)
 WHATSAPP_ALERTS=1
 WHATSAPP_PROVIDER=evolution
-WHATSAPP_API_URL=http://127.0.0.1:8080
+WHATSAPP_API_URL=http://127.0.0.1:8081
 WHATSAPP_API_KEY=<apikey da instancia>
 WHATSAPP_INSTANCE=mcall
 WHATSAPP_RECIPIENTS=5511999999999,120363000000000000@g.us

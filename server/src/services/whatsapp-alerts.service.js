@@ -27,7 +27,6 @@ const HOUR_MS = 60 * 60 * 1000;
 const FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
 const MAX_ITEMS_PER_MESSAGE = 10;
 const MAX_ERROR_LENGTH = 200;
-
 // Estado em memoria, como o resto da coleta. Reiniciar a API esquece o que ja
 // foi avisado: a primeira coleta depois manda um aviso com os parados do momento.
 // ticketId -> { notifiedAt }
@@ -138,9 +137,9 @@ async function sendTestMessage({ requestedBy = null } = {}) {
 
   const now = new Date();
   const text = [
-    "*Mcall Ticket Tag Monitor*",
+    "*Mcall*",
     `Mensagem de teste dos alertas de inatividade${requestedBy ? `, pedida por ${requestedBy}` : ""}, ${formatTime(now)}.`,
-    "Se ela chegou, os avisos de cliente parado vao chegar aqui."
+    "Se ela chegou, os avisos de inatividade vao chegar aqui."
   ].join("\n");
 
   const result = await sendToAll(config, text, now.getTime());
