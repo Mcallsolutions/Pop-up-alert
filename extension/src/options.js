@@ -2,10 +2,23 @@ const form = document.getElementById("optionsForm");
 const apiBaseUrl = document.getElementById("apiBaseUrl");
 const apiToken = document.getElementById("apiToken");
 const inactivitySound = document.getElementById("inactivitySound");
+const testBeepButton = document.getElementById("testBeep");
 const feedback = document.getElementById("feedback");
 
 document.addEventListener("DOMContentLoaded", loadConfig);
 form.addEventListener("submit", saveConfig);
+testBeepButton.addEventListener("click", testBeep);
+
+// Mesmo bip dos alertas, pelo service worker, mesmo com o bip desligado.
+async function testBeep() {
+  feedback.textContent = "Tocando o bip...";
+  testBeepButton.disabled = true;
+  const response = await sendMessage({ type: "TEST_BEEP" });
+  testBeepButton.disabled = false;
+  feedback.textContent = response?.ok
+    ? "Bip tocado. Se nao ouviu, confira o volume do computador e do fone."
+    : `Nao foi possivel tocar o bip: ${response?.error || "erro desconhecido"}`;
+}
 
 async function loadConfig() {
   const response = await sendMessage({ type: "GET_CONFIG" });

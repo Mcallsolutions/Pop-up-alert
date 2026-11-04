@@ -2,7 +2,8 @@
   "manifest_version": 3,
   "name": "Mcall Ticket Tag Monitor",
   "description": "Mostra na tela de tickets do MTalk os alertas de TAG e de inatividade calculados pela API local.",
-  "version": "0.2.1",
+  "version": "0.3.0",
+  "minimum_chrome_version": "116",
   "icons": {
     "16": "assets/icon-16.png",
     "48": "assets/icon-48.png",
@@ -14,7 +15,8 @@
   },
   "options_page": "src/options.html",
   "permissions": [
-    "storage"
+    "storage",
+    "offscreen"
   ],
   "host_permissions": [
     "https://s11.mtalk.com.br/*",

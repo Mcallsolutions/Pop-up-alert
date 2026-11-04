@@ -9,9 +9,17 @@
   <body>
     <main class="popup">
       <header>
-        <div>
-          <p class="eyebrow">Mcall</p>
-          <h1>Ticket Tag Monitor</h1>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4z"></path>
+              <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"></circle>
+            </svg>
+          </span>
+          <div>
+            <h1>Mcall</h1>
+            <p class="subtitle">Ticket Tag Monitor</p>
+          </div>
         </div>
         <span id="apiBadge" class="badge badge-muted">API</span>
       </header>
@@ -21,11 +29,11 @@
           <span>Tickets</span>
           <strong id="totalTickets">0</strong>
         </div>
-        <div>
+        <div class="danger">
           <span>Sem TAG</span>
           <strong id="missingTags">0</strong>
         </div>
-        <div>
+        <div class="warning">
           <span>Inativos</span>
           <strong id="inactiveTickets">0</strong>
         </div>
@@ -52,6 +60,10 @@
           <dt>Alertas de</dt>
           <dd id="scope">-</dd>
         </div>
+        <div>
+          <dt>Bip</dt>
+          <dd id="beepStatus">-</dd>
+        </div>
         <div id="errorRow" hidden>
           <dt>Erro</dt>
           <dd id="lastError">-</dd>
@@ -59,7 +71,7 @@
       </dl>
 
       <div class="actions">
-        <button id="forceCollect" type="button">Coletar agora</button>
+        <button id="forceCollect" type="button" class="primary">Coletar agora</button>
         <button id="checkApi" type="button" class="secondary">Testar API</button>
       </div>
 
@@ -72,11 +84,14 @@
           Seu token de acesso
           <input id="apiToken" name="apiToken" type="password" placeholder="mca_..." autocomplete="off" />
         </label>
-        <label class="check">
-          <input id="inactivitySound" name="inactivitySound" type="checkbox" />
-          Bip quando um cliente com atendente passar do limite de inatividade
-        </label>
-        <button type="submit">Salvar configuracao</button>
+        <div class="check-row">
+          <label class="check">
+            <input id="inactivitySound" name="inactivitySound" type="checkbox" />
+            Bip quando um cliente com atendente passar do limite de inatividade
+          </label>
+          <button id="testBeep" type="button" class="secondary small">Testar bip</button>
+        </div>
+        <button type="submit" class="primary">Salvar configuracao</button>
       </form>
 
       <p id="feedback" class="feedback" role="status"></p>

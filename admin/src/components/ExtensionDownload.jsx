@@ -74,6 +74,10 @@ export default function ExtensionDownload() {
         <li>
           Em <strong>Opcoes</strong> da extensao, informe a URL da API e o token de acesso da pessoa.
         </li>
+        <li>
+          Para atualizar uma versao ja instalada, troque os arquivos da pasta pelos do zip novo, clique em{" "}
+          <strong>Recarregar</strong> no card da extensao e recarregue a aba do MTalk.
+        </li>
       </ol>
 
       <p className="extension-aviso">

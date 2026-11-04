@@ -16,6 +16,7 @@
 
 const { getAttendanceConfig, getRetentionDays } = require("../config/monitoring");
 const { getDatabase } = require("../database");
+const { clearReportCache } = require("./report-cache");
 const { toZonedIso } = require("./time-zone");
 
 const PURGE_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -36,6 +37,8 @@ async function purgeOldReadingsIfDue(now = new Date()) {
   const result = await purgeOldReadings({ days, messageDays, now });
 
   if (result.tickets || result.snapshots || result.analyses) {
+    // Relatorio guardado ainda contaria as leituras que acabaram de sair.
+    clearReportCache();
     console.log(
       `[DB] Retencao de ${days} dias: ${result.tickets} leituras de ticket, ${result.snapshots} coletas e ${result.analyses} analises de atendimento anteriores a ${result.cutoff} apagadas.`
     );

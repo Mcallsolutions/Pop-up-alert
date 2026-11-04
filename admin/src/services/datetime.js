@@ -6,12 +6,20 @@
 // - collected_at: quando o servidor leu a API. E so metadado da coleta.
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
+const timeFormatter = new Intl.DateTimeFormat("pt-BR", { timeStyle: "short" });
 
 export function formatDateTime(value) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return dateTimeFormatter.format(date);
+}
+
+// So a hora ("14:32"), para o aviso de atualizacao automatica.
+export function formatTime(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return "-";
+  return timeFormatter.format(date);
 }
 
 // Usado nas tabelas e nas exportacoes: "10/08/2026 14:30".

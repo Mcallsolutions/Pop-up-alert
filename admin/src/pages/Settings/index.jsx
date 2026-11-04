@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { MessageCircle, RefreshCw, Save } from "lucide-react";
 import { api, getApiBaseUrl, setApiBaseUrl } from "../../services/api";
 import { formatDateTime } from "../../services/datetime";
+import { clearPageCache } from "../../services/page-cache";
 import TokenManager from "../../components/TokenManager";
 import ExtensionDownload from "../../components/ExtensionDownload";
 
@@ -47,6 +48,9 @@ export default function SettingsPage() {
     setFeedback("");
     try {
       const result = await api.mtalkCollect();
+      // A API ja esvaziou o cache dos relatorios; o do Dashboard tambem sai,
+      // para a proxima visita mostrar esta coleta.
+      clearPageCache();
       setFeedback(`Coleta concluida: ${result.totalTickets} tickets, ${result.totalWithoutTag} sem TAG.`);
       setMtalkError("");
     } catch (error) {
