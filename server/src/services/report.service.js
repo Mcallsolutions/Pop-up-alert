@@ -2,9 +2,14 @@ const { getDatabase } = require("../database");
 const { getInactivityThresholdMinutes } = require("../config/monitoring");
 const { getAllowedQueues } = require("./queue-filter");
 const { normalizeAttendantName } = require("./attendant-filter");
+const { toZonedIso } = require("./time-zone");
 
 const INACTIVITY_THRESHOLD_MINUTES = getInactivityThresholdMinutes();
 const DAY_MS = 24 * 60 * 60 * 1000;
+// Clientes por pagina na "Lista de tickets sem TAG" do painel. A exportacao
+// pede tudo de uma vez com pageSize (ate MAX_LIST_ROWS).
+const MISSING_TAGS_PAGE_SIZE = 15;
+const MAX_LIST_ROWS = 1000;
 
 // Um ticket so entra nas listas quando o contato tem nome: sem ele o painel e
 // o alerta nao conseguem dizer de quem e o atendimento.
@@ -142,26 +147,22 @@ async function getSummary(filters = {}) {
 
 // Tickets sem nome de contato sao contados em "incompletosOcultos" e os que
 // aguardam atendente em "semAtendenteOcultos", em vez de virarem linhas.
-async function getMissingTags(filters = {}) {
+//
+// Duas formas de pedir:
+// - paginate: a lista do painel. MISSING_TAGS_PAGE_SIZE clientes por pagina
+//   (filters.page), ou filters.pageSize para a exportacao, com `paginacao`;
+// - sem paginate (IA): ate filters.limit linhas, como sempre foi.
+//
+// maxAgeDays e a limpeza automatica da lista: ticket cuja leitura mais recente
+// e mais velha que isso sai dela — o atendimento acabou ha dias e nao ha mais o
+// que cobrar. Nada e apagado do banco; os outros relatorios continuam vendo o
+// historico inteiro. O corte entra no WHERE da tabela, e nao so no resultado: a
+// leitura mais recente de quem fica dentro e a mesma, e o indice de data limita
+// a varredura aos ultimos dias.
+async function getMissingTags(filters = {}, { paginate = false, maxAgeDays = 0, now = new Date() } = {}) {
   const database = await getDatabase();
-  const { where, params, rankedSql } = buildTicketFilters(filters);
-  const limit = readLimit(filters.limit);
-
-  const rows = await database
-    .prepare(
-      `
-      ${rankedSql}
-      SELECT ${TICKET_COLUMNS_SQL}
-      FROM ranked
-      WHERE rowNumber = 1
-        AND tag_status = 'SEM_TAG'
-        AND ${IDENTIFIED_TICKET_SQL}
-        AND ${HAS_RESPONSIBLE_SQL}
-      ORDER BY datetime(collected_at) DESC, id DESC
-      LIMIT ?
-    `
-    )
-    .all(...params, limit);
+  const since = maxAgeDays ? toZonedIso(new Date(now.getTime() - maxAgeDays * DAY_MS)).slice(0, 19) : "";
+  const { params, rankedSql } = buildTicketFilters(filters, { since });
 
   const counters = await database
     .prepare(
@@ -182,11 +183,43 @@ async function getMissingTags(filters = {}) {
   const totalIdentificados = Number(counters?.totalIdentificados || 0);
   const totalCobraveis = Number(counters?.totalCobraveis || 0);
 
+  // Pagina fora do intervalo cai na ultima (ou na primeira, com a lista vazia).
+  let limit = readLimit(filters.limit);
+  let offset = 0;
+  let paginacao = null;
+  if (paginate) {
+    const pageSize = readPageSize(filters.pageSize);
+    const totalPages = Math.max(1, Math.ceil(totalCobraveis / pageSize));
+    const page = Math.min(Math.max(Math.floor(Number(filters.page)) || 1, 1), totalPages);
+    limit = pageSize;
+    offset = (page - 1) * pageSize;
+    paginacao = { pagina: page, porPagina: pageSize, total: totalCobraveis, totalPaginas: totalPages };
+  }
+
+  const rows = await database
+    .prepare(
+      `
+      ${rankedSql}
+      SELECT ${TICKET_COLUMNS_SQL}
+      FROM ranked
+      WHERE rowNumber = 1
+        AND tag_status = 'SEM_TAG'
+        AND ${IDENTIFIED_TICKET_SQL}
+        AND ${HAS_RESPONSIBLE_SQL}
+      ORDER BY datetime(collected_at) DESC, id DESC
+      LIMIT ? OFFSET ?
+    `
+    )
+    .all(...params, limit, offset);
+
   return {
     items: rows.map(normalizeTicketRow),
     total: totalCobraveis,
     incompletosOcultos: totalSemTag - totalIdentificados,
-    semAtendenteOcultos: totalIdentificados - totalCobraveis
+    semAtendenteOcultos: totalIdentificados - totalCobraveis,
+    ...(paginacao ? { paginacao } : {}),
+    // Para o painel dizer de quando ate quando a lista vai.
+    ...(since ? { limpeza: { dias: maxAgeDays, desde: since } } : {})
   };
 }
 
@@ -351,7 +384,9 @@ async function getTagReportGroupedBy(filters, expression, alias) {
   return { items: rows.map(withFailurePercent) };
 }
 
-function buildTicketFilters(filters = {}) {
+// since ("YYYY-MM-DDTHH:MM:SS", hora local) corta as leituras mais velhas. Vem
+// do servidor, nunca da query string: e a limpeza da lista sem TAG.
+function buildTicketFilters(filters = {}, { since = "" } = {}) {
   const conditions = [];
   const params = [];
   const allowedQueues = getAllowedQueues();
@@ -363,6 +398,10 @@ function buildTicketFilters(filters = {}) {
   params.push(...allowedQueues);
 
   appendDateRange(conditions, params, "collected_at", filters);
+  if (since) {
+    conditions.push("collected_at >= ?");
+    params.push(since);
+  }
   addAttendantFilter(conditions, params, filters.attendant);
   addLikeFilter(conditions, params, "queue_name", filters.queue);
   addNormalizedLikeFilter(conditions, params, "company", filters.company);
@@ -524,7 +563,11 @@ function normalizeComparableText(value) {
 }
 
 function readLimit(value) {
-  return Math.min(Math.max(Number(value) || 500, 1), 1000);
+  return Math.min(Math.max(Number(value) || 500, 1), MAX_LIST_ROWS);
+}
+
+function readPageSize(value) {
+  return Math.min(Math.max(Math.floor(Number(value)) || MISSING_TAGS_PAGE_SIZE, 1), MAX_LIST_ROWS);
 }
 
 function normalizeTicketRow(row) {
@@ -564,6 +607,7 @@ function withInactivityStats(row) {
 }
 
 module.exports = {
+  MISSING_TAGS_PAGE_SIZE,
   addAttendantFilter,
   addLikeFilter,
   addNormalizedLikeFilter,

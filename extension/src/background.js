@@ -8,6 +8,10 @@
 //
 // Todo endereco que a extensao chamar precisa estar em host_permissions no
 // manifest.json — inclusive um dominio novo da API.
+//
+// O bip de inatividade tambem e decidido e tocado daqui, por um documento
+// offscreen (offscreen.js): na aba do MTalk o Chrome so libera som depois de um
+// clique naquela pagina, e o bip ficava mudo.
 
 const CONFIG_KEY = "mcall_config";
 const STATUS_KEY = "mcall_status";
@@ -19,6 +23,7 @@ const BEEP_STATE_KEY = "mcall_inactivity_beep";
 // fica para quem passar dali em diante. Cobre o silencio de 5 minutos do "x".
 const BEEP_STATE_MAX_AGE_MS = 10 * 60 * 1000;
 const MTALK_TICKETS_URL = "https://s11.mtalk.com.br/tickets*";
+const OFFSCREEN_URL = "src/offscreen.html";
 
 const DEFAULT_CONFIG = {
   // API hospedada na VPS. Em maquina de desenvolvimento troque por
@@ -51,11 +56,17 @@ const DEFAULT_STATUS = {
   missingTags: 0,
   withTags: 0,
   waitingTickets: 0,
-  inactiveTickets: 0
+  inactiveTickets: 0,
+  // Ultimo bip tocado e o erro do ultimo que falhou (vazio quando tocou).
+  lastBeepAt: null,
+  beepError: ""
 };
 
 // Fila das decisoes de bip (ver claimInactivityBeep).
 let beepClaims = Promise.resolve();
+// Criacao do documento offscreen em andamento: dois bips juntos nao podem
+// tentar criar dois documentos.
+let creatingOffscreen = null;
 
 chrome.runtime.onInstalled.addListener(async () => {
   const current = await chrome.storage.local.get(CONFIG_KEY);
@@ -70,6 +81,11 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // Pedido para o documento de audio: quem responde e ele.
+  if (message?.target === "offscreen") {
+    return false;
+  }
+
   handleMessage(message)
     .then(sendResponse)
     .catch((error) => {
@@ -100,13 +116,16 @@ async function handleMessage(message) {
       return forceCollect();
     case "CHECK_API_HEALTH":
       return checkApiHealth();
+    case "TEST_BEEP":
+      return testBeep();
     default:
       return { ok: false, error: "Tipo de mensagem desconhecido" };
   }
 }
 
-// canBeep vem so do content script, quando aquela aba consegue tocar o bip
-// agora. O popup da extensao consulta sem ele e nunca consome um bip.
+// canBeep vem so do content script, quando a aba do MTalk esta fora do silencio
+// de 5 minutos do "x". O popup da extensao consulta sem ele e nunca consome um
+// bip.
 async function fetchAlerts({ canBeep = false } = {}) {
   const config = await getConfig();
   const endpoint = `${config.apiBaseUrl}/api/mtalk/alerts`;
@@ -138,6 +157,11 @@ async function fetchAlerts({ canBeep = false } = {}) {
       canBeep && config.inactivitySound && !alerts.stale && Array.isArray(assignedIds)
         ? await claimInactivityBeep(assignedIds.map(String))
         : false;
+
+    // Sem await: o pop-up nao espera o bip acabar para aparecer.
+    if (beep) {
+      playInactivityBeep().catch(() => undefined);
+    }
 
     return { ok: true, alerts, status, beep };
   } catch (error) {
@@ -189,6 +213,66 @@ function claimInactivityBeep(assignedIds) {
     });
 
   return beepClaims;
+}
+
+// Toca o bip pelo documento offscreen e anota o resultado no status, que o
+// popup mostra. Erro aqui nunca derruba os alertas.
+async function playInactivityBeep() {
+  try {
+    await ensureOffscreenDocument();
+    const response = await chrome.runtime.sendMessage({ target: "offscreen", type: "PLAY_BEEP" });
+    if (!response?.ok) {
+      throw new Error(response?.error || "O documento de audio da extensao nao respondeu.");
+    }
+    await updateStatus({ lastBeepAt: new Date().toISOString(), beepError: "" });
+  } catch (error) {
+    console.error("[Mcall Monitor] Bip:", error);
+    await updateStatus({ beepError: error?.message || "Falha ao tocar o bip" });
+    throw error;
+  }
+}
+
+// Botao "Testar bip" do popup: toca mesmo com o bip desligado.
+async function testBeep() {
+  try {
+    await playInactivityBeep();
+    return { ok: true, status: await getStatus() };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Falha ao tocar o bip", status: await getStatus() };
+  }
+}
+
+// Um documento offscreen por extensao. O Chrome fecha o de audio sozinho depois
+// de 30 s em silencio, entao ele e recriado no bip seguinte.
+async function ensureOffscreenDocument() {
+  const documentUrl = chrome.runtime.getURL(OFFSCREEN_URL);
+  const existing = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"],
+    documentUrls: [documentUrl]
+  });
+  if (existing.length) {
+    return;
+  }
+
+  if (!creatingOffscreen) {
+    creatingOffscreen = chrome.offscreen
+      .createDocument({
+        url: OFFSCREEN_URL,
+        reasons: ["AUDIO_PLAYBACK"],
+        justification: "Tocar o bip de inatividade dos clientes do MTalk."
+      })
+      .catch((error) => {
+        // Outro bip criou o documento no meio do caminho: serve do mesmo jeito.
+        if (!/single offscreen document/i.test(error?.message || "")) {
+          throw error;
+        }
+      })
+      .finally(() => {
+        creatingOffscreen = null;
+      });
+  }
+
+  await creatingOffscreen;
 }
 
 async function notifyMtalkTabs() {
@@ -271,10 +355,18 @@ function authHeaders(config) {
   return config.apiToken ? { authorization: `Bearer ${config.apiToken}` } : {};
 }
 
-async function updateStatus(patch) {
-  const status = { ...(await getStatus()), ...patch };
-  await chrome.storage.local.set({ [STATUS_KEY]: status });
-  return status;
+// Em fila: o bip anota o resultado no status enquanto a consulta de outra aba
+// tambem escreve nele, e uma escrita nao pode apagar a outra.
+let statusWrites = Promise.resolve();
+
+function updateStatus(patch) {
+  const write = statusWrites.then(async () => {
+    const status = { ...(await getStatus()), ...patch };
+    await chrome.storage.local.set({ [STATUS_KEY]: status });
+    return status;
+  });
+  statusWrites = write.catch(() => undefined);
+  return write;
 }
 
 async function describeHttpFailure(response) {

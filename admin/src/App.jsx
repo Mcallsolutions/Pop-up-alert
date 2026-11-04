@@ -8,6 +8,7 @@ import AttendancePage from "./pages/Attendance";
 import SettingsPage from "./pages/Settings";
 import LoginGate from "./components/LoginGate";
 import { SESSION_EXPIRED_EVENT, api } from "./services/api";
+import { clearPageCache } from "./services/page-cache";
 import { getEffectiveTheme, saveTheme } from "./services/theme";
 
 const views = [
@@ -56,6 +57,7 @@ export default function App() {
   // Qualquer chamada que receba 401 no meio do uso derruba para o login.
   useEffect(() => {
     function aoExpirar() {
+      clearPageCache();
       setUser(null);
       setGateError("Sua sessao expirou. Entre novamente.");
     }
@@ -76,6 +78,8 @@ export default function App() {
 
   async function sair() {
     await api.logout().catch(() => undefined);
+    // Os numeros guardados sao da sessao que saiu.
+    clearPageCache();
     setUser(null);
     setGateError("");
     setView("dashboard");

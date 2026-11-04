@@ -1,5 +1,7 @@
 const express = require("express");
+const { getMissingTagListDays } = require("../config/monitoring");
 const { scopedFilters } = require("../middleware/auth");
+const { getCachedReport } = require("../services/report-cache");
 const {
   getSummary,
   getFilterOptions,
@@ -16,79 +18,42 @@ const router = express.Router();
 
 // scopedFilters carimba o recorte do token por cima dos filtros da tela: quem
 // tem token de atendente so enxerga os proprios tickets e os que estao sem
-// atendente, em qualquer relatorio.
+// atendente, em qualquer relatorio. O recorte entra na chave do cache junto com
+// os filtros (ver report-cache.js).
 
-router.get("/summary", async (req, res, next) => {
-  try {
-    res.json(await getSummary(scopedFilters(req, req.query)));
-  } catch (error) {
-    next(error);
-  }
-});
+router.get("/summary", cachedReport("summary", getSummary));
+router.get("/filters", cachedReport("filters", getFilterOptions));
+// Paginada (15 clientes por pagina, `page`) e sem quem esta ha mais de
+// MISSING_TAG_LIST_DAYS dias na lista.
+router.get(
+  "/missing-tags",
+  cachedReport("missing-tags", (filters) =>
+    getMissingTags(filters, { paginate: true, maxAgeDays: getMissingTagListDays() })
+  )
+);
+router.get("/inactivity/summary", cachedReport("inactivity-summary", getInactivitySummary));
+router.get("/inactivity/tickets", cachedReport("inactivity-tickets", getInactiveTickets));
+router.get("/inactivity/by-attendant", cachedReport("inactivity-by-attendant", getInactivityByAttendant));
+router.get("/inactivity/by-company", cachedReport("inactivity-by-company", getInactivityByCompany));
+router.get("/by-attendant", cachedReport("by-attendant", getReportByAttendant));
+router.get("/by-queue", cachedReport("by-queue", getReportByQueue));
 
-router.get("/filters", async (req, res, next) => {
-  try {
-    res.json(await getFilterOptions(scopedFilters(req, req.query)));
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/missing-tags", async (req, res, next) => {
-  try {
-    res.json(await getMissingTags(scopedFilters(req, req.query)));
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/inactivity/summary", async (req, res, next) => {
-  try {
-    res.json(await getInactivitySummary(scopedFilters(req, req.query)));
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/inactivity/tickets", async (req, res, next) => {
-  try {
-    res.json(await getInactiveTickets(scopedFilters(req, req.query)));
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/inactivity/by-attendant", async (req, res, next) => {
-  try {
-    res.json(await getInactivityByAttendant(scopedFilters(req, req.query)));
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/inactivity/by-company", async (req, res, next) => {
-  try {
-    res.json(await getInactivityByCompany(scopedFilters(req, req.query)));
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/by-attendant", async (req, res, next) => {
-  try {
-    res.json(await getReportByAttendant(scopedFilters(req, req.query)));
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get("/by-queue", async (req, res, next) => {
-  try {
-    res.json(await getReportByQueue(scopedFilters(req, req.query)));
-  } catch (error) {
-    next(error);
-  }
-});
+// fresh=1 ignora o cache e grava a resposta nova. X-Cache diz se veio do cache
+// e X-Cache-Date de quando e a resposta.
+function cachedReport(name, loader) {
+  return async (req, res, next) => {
+    try {
+      const filters = scopedFilters(req, req.query);
+      const { value, hit, storedAt } = await getCachedReport(name, filters, () => loader(filters), {
+        fresh: String(req.query.fresh || "") === "1"
+      });
+      res.set("X-Cache", hit ? "HIT" : "MISS");
+      res.set("X-Cache-Date", new Date(storedAt).toISOString());
+      res.json(value);
+    } catch (error) {
+      next(error);
+    }
+  };
+}
 
 module.exports = router;
-

@@ -160,19 +160,28 @@ hora (so com login no painel). O zip traz uma pasta so, para
 descompactar e apontar o "Carregar sem compactacao" nela, e **nao leva token nem `.env` dentro**: cada pessoa cola o
 seu token depois de instalar.
 
-A URL da API vem como `http://localhost:3333`; troque no popup ou nas opcoes da extensao se precisar. O token fica no
-`chrome.storage.local` daquele perfil do Chrome, entao cada atendente cola o seu uma vez.
+A URL da API vem como `https://tag-monitor.mcallsolutions.com.br` (a VPS); em desenvolvimento troque para
+`http://localhost:3333` no popup ou nas opcoes da extensao. O token fica no `chrome.storage.local` daquele perfil do
+Chrome, entao cada atendente cola o seu uma vez.
+
+**Atualizando para a v0.3.0:** baixe o zip de novo (ou atualize a pasta `extension`) e clique em **Recarregar** no
+card da extensao em `chrome://extensions`; depois recarregue a aba do MTalk. A versao nova pede a permissao
+`offscreen` (usada so para tocar o bip) e precisa do Chrome 116 ou mais novo. O popup, as opcoes e o pop-up de alertas
+seguem o visual do painel, com tema claro ou escuro conforme o sistema.
 
 Como funciona:
 
 - a cada 1 minuto o content script pede `GET /api/mtalk/alerts` com o token da pessoa (a chamada sai do service worker, porque a pagina https do MTalk nao pode chamar `http://localhost`), e recebe so os alertas do recorte dela;
 - **Registre a TAG do cliente** lista tickets sem TAG com atendente vinculado; **Alerta de inatividade** lista tickets parados ha mais de 15 minutos, com ou sem atendente;
 - clicar no item abre o ticket (`/tickets/<uuid>`); fechar o pop-up silencia por 5 minutos;
-- quando um cliente **com atendente vinculado** passa do limite de inatividade, toca um **bip** curto e baixo, uma vez
-  por cliente (se ele for respondido e parar de novo, toca de novo). Ticket aguardando sem atendente nao toca. Com
-  varias abas do MTalk abertas o bip toca numa so; durante o silencio de 5 minutos ele espera e toca quando o pop-up
-  volta. Quem ja estava parado quando o MTalk foi aberto aparece no pop-up, sem bip. O Chrome so libera som depois do
-  primeiro clique ou tecla na pagina. Da para desligar no popup ou nas opcoes da extensao;
+- quando um cliente **com atendente vinculado** passa do limite de inatividade, toca um **bip** (dois toques curtos),
+  uma vez por cliente (se ele for respondido e parar de novo, toca de novo). Ticket aguardando sem atendente nao toca.
+  Com varias abas do MTalk abertas o bip toca uma vez so; durante o silencio de 5 minutos ele espera e toca quando o
+  pop-up volta. Quem ja estava parado quando o MTalk foi aberto aparece no pop-up, sem bip. O bip sai de um documento
+  offscreen da extensao, e nao da aba do MTalk: ali o Chrome so liberava som depois de um clique na pagina, e o bip
+  ficava mudo a cada recarga. Ele toca com a aba em segundo plano e sem clique, enquanto a tela de tickets estiver
+  aberta. Da para desligar no popup ou nas opcoes; **Testar bip** toca o mesmo som, e a linha **Bip** do popup mostra
+  o ultimo bip tocado ou o erro, se o Chrome nao conseguiu tocar;
 - sem coleta recente no servidor (API fora do ar, token do MTalk recusado) o pop-up some, em vez de mostrar alerta velho;
 - no popup, **Coletar agora** pede uma coleta imediata (com token de atendente, se a ultima terminou ha menos de 30 s,
   ela e reaproveitada) e **Testar API** confere a API local e o token do MTalk.
@@ -273,13 +282,29 @@ Relatorios:
 
 - `GET /api/reports/summary`
 - `GET /api/reports/filters` (valores disponiveis para os filtros do painel)
-- `GET /api/reports/missing-tags`
+- `GET /api/reports/missing-tags` — 15 clientes por pagina (`page`; `pageSize` ate 1000 para a exportacao), com
+  `paginacao` (`pagina`, `porPagina`, `total`, `totalPaginas`). Ticket cuja leitura mais recente tem mais de
+  `MISSING_TAG_LIST_DAYS` dias (padrao **10**) sai sozinho da lista; `limpeza` diz desde quando ela vai. Nada e
+  apagado do banco: os outros relatorios continuam vendo o historico de `RETENTION_DAYS`
 - `GET /api/reports/by-attendant`
 - `GET /api/reports/by-queue`
 - `GET /api/reports/inactivity/summary`
 - `GET /api/reports/inactivity/tickets`
 - `GET /api/reports/inactivity/by-attendant`
 - `GET /api/reports/inactivity/by-company`
+
+**Cache dos relatorios:** cada resposta de `/api/reports/*` fica guardada em memoria na API por
+`REPORT_CACHE_SECONDS` (padrao **300**; `0` desliga), por rota + filtros + recorte. As consultas varrem o historico e o
+SQLite e sincrono — enquanto uma roda, a API inteira espera, inclusive os alertas da extensao —, entao abrir o painel,
+trocar de pagina e varias pessoas olhando o mesmo Dashboard reaproveitam a mesma resposta. `?fresh=1` (botao
+**Atualizar** e a atualizacao automatica do Dashboard) ignora o cache e grava a resposta nova. A coleta manual do
+painel e a limpeza do historico esvaziam o cache. O cabecalho `X-Cache` diz `HIT` ou `MISS`, e `X-Cache-Date`, de
+quando e a resposta.
+
+**Dashboard:** se atualiza sozinho a cada **15 minutos** enquanto estiver aberto (com `fresh=1`), e mostra quando foi a
+ultima atualizacao e quando sera a proxima. Voltar ao Dashboard vindo de outra pagina mostra na hora o que ja estava na
+tela; se ja passou dos 15 minutos, atualiza logo em seguida. Esse cache do navegador fica so em memoria (nunca em
+`localStorage`) e sai no logout.
 
 IA (so ADMIN):
 
@@ -517,7 +542,7 @@ CallMeBot dispensa servidor, mas a ativacao de numeros novos depende de vaga no 
 # no .env (Evolution API)
 WHATSAPP_ALERTS=1
 WHATSAPP_PROVIDER=evolution
-WHATSAPP_API_URL=http://127.0.0.1:8080
+WHATSAPP_API_URL=http://127.0.0.1:8081
 WHATSAPP_API_KEY=<apikey da instancia>
 WHATSAPP_INSTANCE=mcall
 WHATSAPP_RECIPIENTS=5511999999999,120363000000000000@g.us

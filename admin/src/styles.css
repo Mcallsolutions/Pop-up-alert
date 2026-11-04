@@ -552,6 +552,28 @@ nav {
   margin-top: 16px;
 }
 
+/* Quando os numeros foram atualizados e quando sera a proxima vez. */
+.section-toolbar .refresh-status {
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
 /* ------------------------------------------------------------------------ */
 /* Indicadores */
 
@@ -1138,6 +1160,16 @@ tbody tr:hover {
   color: var(--text-3);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Linha de explicacao logo abaixo do titulo de uma tabela. */
+.table-note {
+  margin: 0;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 .attendance-detail {

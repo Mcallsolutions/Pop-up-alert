@@ -5,6 +5,7 @@ const {
   getCurrentAlerts,
   runCollection
 } = require("../services/mtalk/mtalk.collector");
+const { clearReportCache } = require("../services/report-cache");
 
 const router = express.Router();
 
@@ -31,6 +32,11 @@ router.post("/collect", async (req, res, next) => {
 
     const persist = String(req.query.dryRun || "") !== "1";
     const result = await runCollection({ persist, reason: persist ? "manual" : "manual-dry-run" });
+    // Quem pede a coleta pelo painel quer ver o resultado nos relatorios agora,
+    // e nao a resposta guardada antes dela.
+    if (persist) {
+      clearReportCache();
+    }
 
     res.status(persist ? 201 : 200).json({
       ok: true,

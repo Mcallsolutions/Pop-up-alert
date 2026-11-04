@@ -18,9 +18,17 @@
   <body>
     <main class="popup">
       <header>
-        <div>
-          <p class="eyebrow">Configuracoes</p>
-          <h1>Mcall Ticket Tag Monitor</h1>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12.6 2.6A2 2 0 0 0 11.2 2H4a2 2 0 0 0-2 2v7.2a2 2 0 0 0 .6 1.4l8.7 8.7a2.4 2.4 0 0 0 3.4 0l6.6-6.6a2.4 2.4 0 0 0 0-3.4z"></path>
+              <circle cx="7.5" cy="7.5" r=".5" fill="currentColor"></circle>
+            </svg>
+          </span>
+          <div>
+            <h1>Mcall Ticket Tag Monitor</h1>
+            <p class="eyebrow">Configuracoes da extensao</p>
+          </div>
         </div>
       </header>
 
@@ -41,11 +49,12 @@
           <input id="inactivitySound" name="inactivitySound" type="checkbox" />
           Bip quando um cliente com atendente passar do limite de inatividade
           <small>
-            Um bip curto e baixo, uma vez por cliente. O Chrome so libera o som depois do primeiro clique ou tecla na
-            pagina do MTalk.
+            Dois toques curtos, uma vez por cliente, enquanto a tela de tickets do MTalk estiver aberta. Toca mesmo com a
+            aba em segundo plano e sem precisar clicar na pagina.
           </small>
         </label>
-        <button type="submit">Salvar configuracao</button>
+        <button id="testBeep" type="button" class="secondary">Testar bip</button>
+        <button type="submit" class="primary">Salvar configuracao</button>
       </form>
 
       <p id="feedback" class="feedback" role="status"></p>

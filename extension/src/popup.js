@@ -12,12 +12,17 @@ const elements = {
   forceCollect: document.getElementById("forceCollect"),
   checkApi: document.getElementById("checkApi"),
   scope: document.getElementById("scope"),
+  beepStatus: document.getElementById("beepStatus"),
   configForm: document.getElementById("configForm"),
   apiBaseUrl: document.getElementById("apiBaseUrl"),
   apiToken: document.getElementById("apiToken"),
   inactivitySound: document.getElementById("inactivitySound"),
+  testBeep: document.getElementById("testBeep"),
   feedback: document.getElementById("feedback")
 };
+
+// Configuracao salva, para a linha "Bip" dizer se esta ligado.
+let savedConfig = null;
 
 document.addEventListener("DOMContentLoaded", async () => {
   await load();
@@ -27,11 +32,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 elements.forceCollect.addEventListener("click", forceCollect);
 elements.checkApi.addEventListener("click", checkApi);
+elements.testBeep.addEventListener("click", testBeep);
 elements.configForm.addEventListener("submit", saveConfig);
 
 async function load() {
   const response = await sendMessage({ type: "GET_STATUS" });
   if (response?.ok) {
+    savedConfig = response.config || null;
     renderStatus(response.status);
     elements.apiBaseUrl.value = response.config?.apiBaseUrl || "https://tag-monitor.mcallsolutions.com.br";
     // O campo ja vem preenchido para que salvar a URL nao apague o token.
@@ -50,7 +57,9 @@ async function forceCollect() {
 
   if (response?.ok) {
     const result = response.result || {};
-    setFeedback(`Coleta concluida: ${result.totalTickets || 0} tickets, ${result.totalWithoutTag || 0} sem TAG.`);
+    // Token de atendente reaproveita a coleta que terminou ha menos de 30 s.
+    const origem = result.reaproveitada ? "Coleta recente reaproveitada" : "Coleta concluida";
+    setFeedback(`${origem}: ${result.totalTickets || 0} tickets, ${result.totalWithoutTag || 0} sem TAG.`);
   } else {
     setFeedback(response?.error || "Nao foi possivel coletar");
   }
@@ -76,6 +85,21 @@ async function checkApi() {
   } else {
     setFeedback(response?.error || "API indisponivel.");
   }
+  await load();
+}
+
+// Toca o mesmo bip dos alertas, pelo mesmo caminho (service worker + documento
+// offscreen), mesmo com o bip desligado.
+async function testBeep() {
+  setFeedback("Tocando o bip...");
+  elements.testBeep.disabled = true;
+  const response = await sendMessage({ type: "TEST_BEEP" });
+  elements.testBeep.disabled = false;
+  setFeedback(
+    response?.ok
+      ? "Bip tocado. Se nao ouviu, confira o volume do computador e do fone."
+      : `Nao foi possivel tocar o bip: ${response?.error || "erro desconhecido"}`
+  );
   await load();
 }
 
@@ -114,6 +138,7 @@ function renderStatus(status = {}) {
       ? "Coleta desatualizada: alertas ocultos"
       : "Alertas em dia";
   elements.scope.textContent = status.scopeAttendant || "todos os atendentes";
+  elements.beepStatus.textContent = describeBeep(status);
   elements.lastError.textContent = status.lastError || "-";
   elements.errorRow.hidden = !status.lastError;
 
@@ -128,6 +153,16 @@ function renderStatus(status = {}) {
     elements.apiBadge.classList.add("badge-muted");
     elements.apiBadge.textContent = "API";
   }
+}
+
+function describeBeep(status) {
+  if (savedConfig?.inactivitySound === false) {
+    return "Desligado";
+  }
+  if (status.beepError) {
+    return `Falhou: ${status.beepError}`;
+  }
+  return status.lastBeepAt ? `Ligado, ultimo bip ${formatDate(status.lastBeepAt)}` : "Ligado";
 }
 
 function sendMessage(message) {

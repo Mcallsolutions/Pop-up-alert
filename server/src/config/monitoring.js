@@ -37,6 +37,12 @@ const DEFAULT_TIME_ZONE = "America/Sao_Paulo";
 // Dias de historico de coletas no banco. Cada coleta grava de novo todos os
 // tickets em atendimento, entao sem limite o banco so cresce.
 const DEFAULT_RETENTION_DAYS = 90;
+// Cliente sem TAG cuja ultima leitura e mais velha que isso sai sozinho da
+// "Lista de tickets sem TAG". O historico continua no banco (RETENTION_DAYS)
+// para os outros relatorios.
+const DEFAULT_MISSING_TAG_LIST_DAYS = 10;
+// Por quanto tempo uma resposta de relatorio do painel fica em cache na API.
+const DEFAULT_REPORT_CACHE_SECONDS = 300;
 // Analise de atendimento por IA (desligada por padrao). Teto de GETs em
 // /messages/{ticketId} por coleta: a leitura e incremental e nunca pode virar
 // "uma chamada por ticket a cada minuto".
@@ -60,6 +66,16 @@ function getTimeZone() {
 // Zero e valido: desliga a limpeza e guarda tudo.
 function getRetentionDays() {
   return readNonNegativeInteger(process.env.RETENTION_DAYS, DEFAULT_RETENTION_DAYS);
+}
+
+// Zero desliga a limpeza: a lista volta a mostrar todo o historico.
+function getMissingTagListDays() {
+  return readNonNegativeInteger(process.env.MISSING_TAG_LIST_DAYS, DEFAULT_MISSING_TAG_LIST_DAYS);
+}
+
+// Zero desliga o cache: toda consulta vai direto ao banco.
+function getReportCacheTtlMs() {
+  return readNonNegativeInteger(process.env.REPORT_CACHE_SECONDS, DEFAULT_REPORT_CACHE_SECONDS) * 1000;
 }
 
 function getMtalkConfig() {
@@ -189,7 +205,9 @@ module.exports = {
   MAX_TICKETS_PER_SNAPSHOT,
   getAttendanceConfig,
   getInactivityThresholdMinutes,
+  getMissingTagListDays,
   getMtalkConfig,
+  getReportCacheTtlMs,
   getRetentionDays,
   getTimeZone,
   getWhatsappConfig

@@ -19,15 +19,17 @@ export default function Inactivity() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  async function load(activeFilters = filters) {
+  // fresh: o botao Atualizar pula o cache de relatorios da API.
+  async function load(activeFilters = filters, { fresh = false } = {}) {
+    const query = fresh ? { ...activeFilters, fresh: 1 } : activeFilters;
     setLoading(true);
     setError("");
     try {
       const [summaryData, ticketData, attendantData, companyData] = await Promise.all([
-        api.inactivitySummary(activeFilters),
-        api.inactiveTickets(activeFilters),
-        api.inactivityByAttendant(activeFilters),
-        api.inactivityByCompany(activeFilters)
+        api.inactivitySummary(query),
+        api.inactiveTickets(query),
+        api.inactivityByAttendant(query),
+        api.inactivityByCompany(query)
       ]);
       setSummary(summaryData);
       setTickets(ticketData.items || []);
@@ -96,7 +98,7 @@ export default function Inactivity() {
             atividade no periodo (a maior parada de cada um).
           </p>
         </div>
-        <button className="secondary-button" type="button" onClick={() => load()}>
+        <button className="secondary-button" type="button" disabled={loading} onClick={() => load(filters, { fresh: true })}>
           <RefreshCw aria-hidden="true" size={17} />
           Atualizar
         </button>
@@ -105,7 +107,7 @@ export default function Inactivity() {
       <FilterBar
         filters={filters}
         onChange={updateFilter}
-        onApply={load}
+        onApply={(activeFilters) => load(activeFilters)}
         onClear={clearFilters}
         onExportPdf={handleExportPdf}
         onExportDocx={handleExportDocx}
