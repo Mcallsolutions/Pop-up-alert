@@ -624,7 +624,7 @@ function countAlerts(item) {
 
 function describeSystemAlert(alerta) {
   if (alerta.tipo === "CLIENTE_AGUARDANDO") {
-    return `${alerta.minutos} min sem resposta humana${alerta.emAberto ? " (ainda aguardando no fim da janela)" : ""}`;
+    return `${formatMinutes(alerta.minutos)} sem resposta humana${alerta.emAberto ? " (ainda aguardando no fim da janela)" : ""}`;
   }
   if (alerta.tipo === "ANALISE_BLOQUEADA") {
     return Object.entries(alerta.tipos || {})

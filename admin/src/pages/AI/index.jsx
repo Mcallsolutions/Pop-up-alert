@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Bot, Pencil, Plus, RefreshCw, Save, Sparkles, Trash2, X } from "lucide-react";
-import FilterBar, { sameFilters, todayFilters } from "../../components/FilterBar";
+import FilterBar, { isInvertedRange, sameFilters, todayFilters } from "../../components/FilterBar";
 import AiSummaryCard from "../../components/AiSummaryCard";
 import { api } from "../../services/api";
 import { formatDateTime } from "../../services/datetime";
@@ -180,7 +180,7 @@ export default function AiPage() {
       />
 
       <div className="filter-actions">
-        <button className="primary-button" type="button" onClick={generate} disabled={generating || !configurada}>
+        <button className="primary-button" type="button" onClick={generate} disabled={generating || !configurada || isInvertedRange(filters)}>
           <Sparkles aria-hidden="true" size={17} />
           {generating ? "Gerando..." : "Gerar resumo com IA"}
         </button>

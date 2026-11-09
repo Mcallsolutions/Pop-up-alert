@@ -59,6 +59,15 @@ function getInactivityThresholdMinutes() {
   return readPositiveInteger(process.env.INACTIVITY_THRESHOLD_MINUTES, DEFAULT_INACTIVITY_THRESHOLD_MINUTES);
 }
 
+// Minutos parado em que a nota de inatividade do "padrao de atendimento" chega a
+// zero (ver service-standard.js). Padrao: 4x o limite de inatividade. Valor
+// menor ou igual ao limite nao faz sentido e volta ao padrao.
+function getServiceStandardZeroMinutes() {
+  const threshold = getInactivityThresholdMinutes();
+  const configured = readPositiveInteger(process.env.SERVICE_STANDARD_ZERO_MINUTES, threshold * 4);
+  return configured > threshold ? configured : threshold * 4;
+}
+
 function getTimeZone() {
   return String(process.env.MONITOR_TIME_ZONE || "").trim() || DEFAULT_TIME_ZONE;
 }
@@ -209,6 +218,7 @@ module.exports = {
   getMtalkConfig,
   getReportCacheTtlMs,
   getRetentionDays,
+  getServiceStandardZeroMinutes,
   getTimeZone,
   getWhatsappConfig
 };

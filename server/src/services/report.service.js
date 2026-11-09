@@ -1,5 +1,6 @@
 const { getDatabase } = require("../database");
-const { getInactivityThresholdMinutes } = require("../config/monitoring");
+const { getInactivityThresholdMinutes, getServiceStandardZeroMinutes } = require("../config/monitoring");
+const { buildServiceStandard } = require("./service-standard");
 const { getAllowedQueues } = require("./queue-filter");
 const { normalizeAttendantName } = require("./attendant-filter");
 const { toZonedIso } = require("./time-zone");
@@ -56,6 +57,41 @@ function buildRankedTicketsSql(where, scopeSql) {
 function buildPeakInactivitySql(where, scopeSql) {
   return `
       WITH leituras_por_parada AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY external_ticket_id
+            ORDER BY COALESCE(inactivity_minutes, 0) DESC, datetime(collected_at) DESC, id DESC
+          ) AS rowNumber
+        FROM tickets
+        ${where}
+      ),
+      pico AS (
+        SELECT * FROM leituras_por_parada
+        WHERE rowNumber = 1${scopeSql ? ` AND ${scopeSql}` : ""}
+      )`;
+}
+
+// Prefixo do PADRAO DE ATENDIMENTO: de cada ticket, a maior parada do periodo
+// (pico, com o recorte do token e o atendente daquele momento) e o status de TAG
+// da leitura mais recente (ultima). As duas leituras partem do mesmo WHERE, entao
+// os parametros dele aparecem duas vezes e o recorte do token vem depois.
+function buildStandardSql(where, scopeSql) {
+  return `
+      WITH todas_leituras AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY external_ticket_id
+            ORDER BY datetime(collected_at) DESC, id DESC
+          ) AS rowNumber
+        FROM tickets
+        ${where}
+      ),
+      ultima AS (
+        SELECT external_ticket_id AS ultimaTicketId, tag_status AS ultimaTagStatus
+        FROM todas_leituras
+        WHERE rowNumber = 1
+      ),
+      leituras_por_parada AS (
         SELECT *,
           ROW_NUMBER() OVER (
             PARTITION BY external_ticket_id
@@ -159,8 +195,16 @@ async function getSummary(filters = {}) {
 // historico inteiro. O corte entra no WHERE da tabela, e nao so no resultado: a
 // leitura mais recente de quem fica dentro e a mesma, e o indice de data limita
 // a varredura aos ultimos dias.
-async function getMissingTags(filters = {}, { paginate = false, maxAgeDays = 0, now = new Date() } = {}) {
+//
+// A limpeza so vale para a lista "de agora". Quem escolhe um dia ou um periodo
+// esta consultando o passado de proposito, e cortar nos ultimos dias esvaziaria
+// a consulta: com data nos filtros ela nao se aplica.
+async function getMissingTags(filters = {}, { paginate = false, maxAgeDays: configuredMaxAgeDays = 0, now = new Date() } = {}) {
   const database = await getDatabase();
+  const hasDateFilter = Boolean(
+    String(filters.day || "").trim() || String(filters.startDate || "").trim() || String(filters.endDate || "").trim()
+  );
+  const maxAgeDays = hasDateFilter ? 0 : configuredMaxAgeDays;
   const since = maxAgeDays ? toZonedIso(new Date(now.getTime() - maxAgeDays * DAY_MS)).slice(0, 19) : "";
   const { params, rankedSql } = buildTicketFilters(filters, { since });
 
@@ -183,18 +227,7 @@ async function getMissingTags(filters = {}, { paginate = false, maxAgeDays = 0, 
   const totalIdentificados = Number(counters?.totalIdentificados || 0);
   const totalCobraveis = Number(counters?.totalCobraveis || 0);
 
-  // Pagina fora do intervalo cai na ultima (ou na primeira, com a lista vazia).
-  let limit = readLimit(filters.limit);
-  let offset = 0;
-  let paginacao = null;
-  if (paginate) {
-    const pageSize = readPageSize(filters.pageSize);
-    const totalPages = Math.max(1, Math.ceil(totalCobraveis / pageSize));
-    const page = Math.min(Math.max(Math.floor(Number(filters.page)) || 1, 1), totalPages);
-    limit = pageSize;
-    offset = (page - 1) * pageSize;
-    paginacao = { pagina: page, porPagina: pageSize, total: totalCobraveis, totalPaginas: totalPages };
-  }
+  const { limit, offset, paginacao } = resolvePage(filters, totalCobraveis, paginate);
 
   const rows = await database
     .prepare(
@@ -298,9 +331,26 @@ async function getInactivitySummary(filters = {}) {
   };
 }
 
-async function getInactiveTickets(filters = {}) {
+// Mesmas duas formas de pedir de getMissingTags: paginate (a lista do painel,
+// 15 por pagina em filters.page, ou filters.pageSize na exportacao, com
+// `paginacao`) ou, sem paginate, ate filters.limit linhas (IA).
+async function getInactiveTickets(filters = {}, { paginate = false } = {}) {
   const database = await getDatabase();
   const { params, peakSql } = buildTicketFilters(filters);
+  const counter = await database
+    .prepare(
+      `
+      ${peakSql}
+      SELECT COUNT(*) AS total
+      FROM pico
+      WHERE COALESCE(inactivity_minutes, 0) > ?
+        AND ${IDENTIFIED_TICKET_SQL}
+    `
+    )
+    .get(...params, INACTIVITY_THRESHOLD_MINUTES);
+
+  const total = Number(counter?.total || 0);
+  const { limit, offset, paginacao } = resolvePage(filters, total, paginate);
   const rows = await database
     .prepare(
       `
@@ -310,12 +360,12 @@ async function getInactiveTickets(filters = {}) {
       WHERE COALESCE(inactivity_minutes, 0) > ?
         AND ${IDENTIFIED_TICKET_SQL}
       ORDER BY COALESCE(inactivity_minutes, 0) DESC, datetime(collected_at) DESC, id DESC
-      LIMIT ?
+      LIMIT ? OFFSET ?
     `
     )
-    .all(...params, INACTIVITY_THRESHOLD_MINUTES, readLimit(filters.limit));
+    .all(...params, INACTIVITY_THRESHOLD_MINUTES, limit, offset);
 
-  return { items: rows.map(normalizeTicketRow) };
+  return { items: rows.map(normalizeTicketRow), total, ...(paginacao ? { paginacao } : {}) };
 }
 
 async function getInactivityByAttendant(filters = {}) {
@@ -349,6 +399,40 @@ async function getInactivityGroupedBy(filters, expression, alias, extraCondition
     .all(...params, INACTIVITY_THRESHOLD_MINUTES);
 
   return { items: rows.map(withInactivityStats) };
+}
+
+// Padrao de atendimento (service-standard.js): nota de 0 a 100 por ticket que
+// junta inatividade e TAG, em media geral e por atendente.
+async function getServiceStandard(filters = {}) {
+  const database = await getDatabase();
+  const { standardParams, standardSql } = buildTicketFilters(filters);
+  const rows = await database
+    .prepare(
+      `
+      ${standardSql}
+      SELECT
+        pico.external_ticket_id AS ticketId,
+        trim(coalesce(pico.attendant, '')) AS attendant,
+        COALESCE(pico.inactivity_minutes, 0) AS inactivityMinutes,
+        ultima.ultimaTagStatus AS tagStatus
+      FROM pico
+      JOIN ultima ON ultima.ultimaTicketId = pico.external_ticket_id
+      WHERE ${IDENTIFIED_TICKET_SQL}
+    `
+    )
+    .all(...standardParams);
+
+  const tickets = rows.map((row) => ({
+    attendant: row.attendant,
+    inactivityMinutes: Number(row.inactivityMinutes || 0),
+    hasResponsible: Boolean(row.attendant),
+    hasTag: row.tagStatus === "COM_TAG"
+  }));
+
+  return buildServiceStandard(tickets, {
+    thresholdMinutes: INACTIVITY_THRESHOLD_MINUTES,
+    zeroMinutes: getServiceStandardZeroMinutes()
+  });
 }
 
 async function getReportByAttendant(filters = {}) {
@@ -421,7 +505,11 @@ function buildTicketFilters(filters = {}, { since = "" } = {}) {
     // Consultas de TAG: a leitura mais recente de cada ticket.
     rankedSql: buildRankedTicketsSql(baseWhere, scope.sql),
     // Consultas de inatividade: a leitura de maior parada de cada ticket.
-    peakSql: buildPeakInactivitySql(baseWhere, scope.sql)
+    peakSql: buildPeakInactivitySql(baseWhere, scope.sql),
+    // Padrao de atendimento: usa pico e ultima leitura, por isso o WHERE entra
+    // duas vezes (standardParams).
+    standardSql: buildStandardSql(baseWhere, scope.sql),
+    standardParams: [...params, ...params, ...scope.params]
   };
 }
 
@@ -570,6 +658,24 @@ function readPageSize(value) {
   return Math.min(Math.max(Math.floor(Number(value)) || MISSING_TAGS_PAGE_SIZE, 1), MAX_LIST_ROWS);
 }
 
+// LIMIT/OFFSET de uma lista. Sem paginate vale filters.limit (a IA); com ele, a
+// pagina pedida em filters.page — fora do intervalo cai na ultima (ou na
+// primeira, com a lista vazia) — e `paginacao` descreve onde a tela esta.
+function resolvePage(filters, total, paginate) {
+  if (!paginate) {
+    return { limit: readLimit(filters.limit), offset: 0, paginacao: null };
+  }
+
+  const pageSize = readPageSize(filters.pageSize);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(Math.floor(Number(filters.page)) || 1, 1), totalPages);
+  return {
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+    paginacao: { pagina: page, porPagina: pageSize, total, totalPaginas: totalPages }
+  };
+}
+
 function normalizeTicketRow(row) {
   return {
     ...row,
@@ -619,6 +725,7 @@ module.exports = {
   getInactiveTickets,
   getInactivityByAttendant,
   getInactivityByCompany,
+  getServiceStandard,
   getReportByAttendant,
   getReportByQueue
 };

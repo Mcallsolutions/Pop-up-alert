@@ -29,9 +29,20 @@ export function formatTicketDateTime(ticket) {
   return String(ticket?.displayTime || "").trim() || "-";
 }
 
+// Duracao em minutos para leitura humana: ate 59 min fica "45 min"; de 1 hora
+// em diante vira "1 h" ou "1 h 05 min"; de 1 dia em diante, "1 d" ou "1 d 2 h".
+// Valores quebrados (medias) sao arredondados; zero ou invalido vira "-".
 export function formatMinutes(value) {
-  const minutes = Number(value || 0);
-  return minutes ? `${minutes} min` : "-";
+  const total = Math.round(Number(value) || 0);
+  if (total <= 0) return "-";
+  if (total < 60) return `${total} min`;
+
+  const days = Math.floor(total / 1440);
+  const hours = Math.floor((total % 1440) / 60);
+  const minutes = total % 60;
+
+  if (days) return hours ? `${days} d ${hours} h` : `${days} d`;
+  return minutes ? `${hours} h ${String(minutes).padStart(2, "0")} min` : `${hours} h`;
 }
 
 // Dia de hoje no formato do input[type=date] (YYYY-MM-DD), no fuso do operador.
