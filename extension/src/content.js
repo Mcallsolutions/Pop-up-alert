@@ -24,6 +24,17 @@
     return false;
   });
 
+  // Mesma regra do painel: ate 59 min fica "45 min"; depois "1 h" ou "1 h 05 min".
+  function formatDuration(value) {
+    const total = Math.round(Number(value) || 0);
+    if (total < 60) return `${total} min`;
+    const days = Math.floor(total / 1440);
+    const hours = Math.floor((total % 1440) / 60);
+    const minutes = total % 60;
+    if (days) return hours ? `${days} d ${hours} h` : `${days} d`;
+    return minutes ? `${hours} h ${String(minutes).padStart(2, "0")} min` : `${hours} h`;
+  }
+
   injectAlertStyles();
   refreshAlerts().catch(reportError);
   refreshTimer = window.setInterval(() => refreshAlerts().catch(reportError), REFRESH_INTERVAL_MS);
@@ -90,7 +101,8 @@
       ),
       buildAlertSection("inactivity", "Alerta de inatividade", inactive, (ticket) => {
         const inactiveFor = Number(ticket.inactivityMinutes || 0);
-        const inactivityText = inactiveFor > 0 ? `${inactiveFor} min sem atividade` : `Mais de ${threshold} min sem atividade`;
+        const inactivityText =
+          inactiveFor > 0 ? `${formatDuration(inactiveFor)} sem atividade` : `Mais de ${threshold} min sem atividade`;
         return [inactivityText, ticket.displayTime ? `Horario ${ticket.displayTime}` : "", ticket.queue, ticket.attendant]
           .filter(Boolean)
           .join(" · ");

@@ -10,6 +10,7 @@ const {
   getInactiveTickets,
   getInactivityByAttendant,
   getInactivityByCompany,
+  getServiceStandard,
   getReportByAttendant,
   getReportByQueue
 } = require("../services/report.service");
@@ -32,7 +33,13 @@ router.get(
   )
 );
 router.get("/inactivity/summary", cachedReport("inactivity-summary", getInactivitySummary));
-router.get("/inactivity/tickets", cachedReport("inactivity-tickets", getInactiveTickets));
+// Paginada como a de sem TAG (15 por pagina, `page`; `pageSize` na exportacao).
+router.get(
+  "/inactivity/tickets",
+  cachedReport("inactivity-tickets", (filters) => getInactiveTickets(filters, { paginate: true }))
+);
+// Padrao de atendimento: porcentagem que junta TAG e inatividade (service-standard.js).
+router.get("/service-standard", cachedReport("service-standard", getServiceStandard));
 router.get("/inactivity/by-attendant", cachedReport("inactivity-by-attendant", getInactivityByAttendant));
 router.get("/inactivity/by-company", cachedReport("inactivity-by-company", getInactivityByCompany));
 router.get("/by-attendant", cachedReport("by-attendant", getReportByAttendant));

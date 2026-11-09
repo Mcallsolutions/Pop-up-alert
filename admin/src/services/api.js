@@ -88,6 +88,9 @@ export const api = {
   inactivityByCompany(filters = {}) {
     return request(`/api/reports/inactivity/by-company${toQuery(filters)}`);
   },
+  serviceStandard(filters = {}) {
+    return request(`/api/reports/service-standard${toQuery(filters)}`);
+  },
   byAttendant(filters = {}) {
     return request(`/api/reports/by-attendant${toQuery(filters)}`);
   },

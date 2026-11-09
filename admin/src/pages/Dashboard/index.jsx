@@ -5,6 +5,7 @@ import AiSummaryCard from "../../components/AiSummaryCard";
 import { api } from "../../services/api";
 import { formatDateTime, formatTime } from "../../services/datetime";
 import { readPageCache, writePageCache } from "../../services/page-cache";
+import { formatPercent, standardTone } from "../../services/standard";
 
 // O Dashboard se atualiza sozinho a cada 15 minutos enquanto estiver aberto. A
 // atualizacao automatica e o botao "Atualizar" pedem dados novos (fresh), sem o
@@ -22,6 +23,9 @@ export default function Dashboard() {
   const [attendants, setAttendants] = useState(cached?.data.attendants || []);
   const [queues, setQueues] = useState(cached?.data.queues || []);
   const [aiSummary, setAiSummary] = useState(cached?.data.aiSummary || null);
+  // Padrao de atendimento (TAG + inatividade). Dado guardado antes dele existir
+  // nao tem o campo: fica "-" ate a proxima atualizacao.
+  const [standard, setStandard] = useState(cached?.data.standard || null);
   const [loadedAt, setLoadedAt] = useState(cached?.loadedAt || 0);
   // Ultima tentativa, com ou sem sucesso: a proxima atualizacao conta dela, para
   // a API fora do ar nao virar uma tentativa por segundo.
@@ -48,10 +52,11 @@ export default function Dashboard() {
     try {
       // O resumo da IA e apenas leitura aqui: quem gera um novo e a pagina "IA".
       // Uma falha nele nao pode derrubar o dashboard inteiro.
-      const [summaryData, attendantData, queueData, aiSummaryData] = await Promise.all([
+      const [summaryData, attendantData, queueData, standardData, aiSummaryData] = await Promise.all([
         api.summary(query),
         api.byAttendant(query),
         api.byQueue(query),
+        api.serviceStandard(query),
         api.latestAiSummary().catch(() => null)
       ]);
       if (requestId !== requestRef.current) return;
@@ -60,12 +65,14 @@ export default function Dashboard() {
         summary: summaryData,
         attendants: attendantData.items || [],
         queues: queueData.items || [],
+        standard: standardData,
         aiSummary: aiSummaryData
       };
       const now = Date.now();
       setSummary(data.summary);
       setAttendants(data.attendants);
       setQueues(data.queues);
+      setStandard(data.standard);
       setAiSummary(data.aiSummary);
       setLoadedAt(now);
       writePageCache(CACHE_NAME, { filters: activeFilters, data, loadedAt: now });
@@ -149,6 +156,11 @@ export default function Dashboard() {
           tone="warning"
         />
         <Metric label="Conformidade" value={`${summary?.compliancePercent || 0}%`} tone="success" />
+        <Metric
+          label="Padrao de atendimento"
+          value={formatPercent(standard?.percent)}
+          tone={standardTone(standard?.percent)}
+        />
         <Metric label="Leituras recebidas" value={summary?.totalReadings || 0} />
         <Metric label="Ultima coleta" value={formatDateTime(summary?.lastCollectedAt)} compact />
       </div>
@@ -159,7 +171,13 @@ export default function Dashboard() {
       />
 
       <div className="two-column">
-        <ReportTable title="Por atendente" rows={attendants} labelKey="attendant" loading={loading} />
+        <ReportTable
+          title="Por atendente"
+          rows={attendants}
+          labelKey="attendant"
+          loading={loading}
+          standards={standard?.items}
+        />
         <ReportTable title="Por fila" rows={queues} labelKey="queue" loading={loading} />
       </div>
     </section>
@@ -175,7 +193,11 @@ function Metric({ label, value, tone = "default", compact = false }) {
   );
 }
 
-function ReportTable({ title, rows, labelKey, loading }) {
+// standards (opcional): padrao de atendimento por nome, vira a coluna "Padrao".
+function ReportTable({ title, rows, labelKey, loading, standards }) {
+  const standardByName = standards ? new Map(standards.map((item) => [item[labelKey], item.percent])) : null;
+  const columns = standardByName ? 5 : 4;
+
   return (
     <section className="table-panel">
       <h3>{title}</h3>
@@ -187,12 +209,13 @@ function ReportTable({ title, rows, labelKey, loading }) {
               <th>Total</th>
               <th>Sem TAG</th>
               <th>Falha</th>
+              {standardByName ? <th>Padrao</th> : null}
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan="4">Carregando...</td>
+                <td colSpan={columns}>Carregando...</td>
               </tr>
             ) : rows.length ? (
               rows.slice(0, 8).map((row) => (
@@ -201,11 +224,12 @@ function ReportTable({ title, rows, labelKey, loading }) {
                   <td>{row.totalTickets}</td>
                   <td>{row.totalWithoutTag}</td>
                   <td>{row.failurePercent}%</td>
+                  {standardByName ? <td>{formatPercent(standardByName.get(row[labelKey]) ?? null)}</td> : null}
                 </tr>
               ))
             ) : (
               <tr>
-                <td colSpan="4">Sem dados recebidos.</td>
+                <td colSpan={columns}>Sem dados recebidos.</td>
               </tr>
             )}
           </tbody>

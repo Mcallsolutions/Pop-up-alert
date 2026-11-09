@@ -278,18 +278,23 @@ Coleta e alertas:
   nem diagnostico: a resposta traz so os totais do recorte dele, e uma coleta que terminou ha menos de 30 s e
   reaproveitada em vez de chamar o MTalk de novo
 
-Relatorios:
+Relatorios (todos aceitam `day` ou o periodo `startDate`/`endDate`, `YYYY-MM-DD`, inclusivos; o dia tem prioridade):
 
 - `GET /api/reports/summary`
 - `GET /api/reports/filters` (valores disponiveis para os filtros do painel)
 - `GET /api/reports/missing-tags` — 15 clientes por pagina (`page`; `pageSize` ate 1000 para a exportacao), com
   `paginacao` (`pagina`, `porPagina`, `total`, `totalPaginas`). Ticket cuja leitura mais recente tem mais de
   `MISSING_TAG_LIST_DAYS` dias (padrao **10**) sai sozinho da lista; `limpeza` diz desde quando ela vai. Nada e
-  apagado do banco: os outros relatorios continuam vendo o historico de `RETENTION_DAYS`
+  apagado do banco: os outros relatorios continuam vendo o historico de `RETENTION_DAYS`. Com `day` ou
+  `startDate`/`endDate` nos filtros a limpeza nao se aplica (e uma consulta ao passado de proposito)
 - `GET /api/reports/by-attendant`
 - `GET /api/reports/by-queue`
 - `GET /api/reports/inactivity/summary`
-- `GET /api/reports/inactivity/tickets`
+- `GET /api/reports/inactivity/tickets` — paginada como a de sem TAG (`page`, `pageSize`, `paginacao`)
+- `GET /api/reports/service-standard` — **padrao de atendimento** (0 a 100%), geral e por atendente. Cada ticket vale
+  50% pela inatividade e 50% pela TAG: ate `INACTIVITY_THRESHOLD_MINUTES` parado a nota e 100 e depois cai em linha
+  reta ate zerar em `SERVICE_STANDARD_ZERO_MINUTES` (padrao 4x o limite); sem TAG a parte da TAG vale 0. Ticket sem
+  atendente so conta pela inatividade. A parada de cada ticket e a maior do periodo
 - `GET /api/reports/inactivity/by-attendant`
 - `GET /api/reports/inactivity/by-company`
 

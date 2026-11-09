@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import FilterBar, { emptyFilters } from "../../components/FilterBar";
+import FilterBar, { describeFilters, emptyFilters } from "../../components/FilterBar";
 import { api } from "../../services/api";
 import { buildFileName, exportDocx, exportPdf } from "../../services/export";
 import { formatDateTime, formatMinutes, formatTicketDateTime } from "../../services/datetime";
 
-const EXPORT_HEADERS = ["Cliente", "Fila", "Atendente", "Empresa", "Horario do ticket", "Sem resposta (min)", "URL"];
+const EXPORT_HEADERS = ["Cliente", "Fila", "Atendente", "Empresa", "Horario do ticket", "Sem resposta", "URL"];
 // A exportacao leva a lista inteira do recorte, nao so a pagina da tela.
 const EXPORT_PAGE_SIZE = 1000;
 
@@ -87,7 +87,7 @@ export default function Reports() {
       ticket.attendant || "-",
       ticket.company || "-",
       formatTicketDateTime(ticket),
-      ticket.inactivityMinutes ?? "",
+      formatMinutes(ticket.inactivityMinutes),
       ticket.url || ""
     ]);
   }
@@ -122,7 +122,7 @@ export default function Reports() {
       <div className="section-toolbar">
         <div>
           <h2>Tickets sem TAG</h2>
-          <p>Consulte ocorrencias por dia, atendente, fila, empresa ou cliente.</p>
+          <p>Consulte ocorrencias por dia ou periodo, atendente, fila, empresa ou cliente.</p>
         </div>
         <button
           className="secondary-button"
@@ -274,19 +274,4 @@ function MiniReport({ title, rows, labelKey }) {
       </div>
     </section>
   );
-}
-
-// Resume os filtros ativos para aparecer no cabecalho do PDF/DOCX exportado.
-function describeFilters(filters) {
-  const labels = {
-    day: "Dia",
-    attendant: "Atendente",
-    company: "Empresa",
-    queue: "Fila",
-    clientName: "Cliente"
-  };
-  const active = Object.entries(labels)
-    .filter(([key]) => String(filters[key] || "").trim())
-    .map(([key, label]) => `${label}: ${filters[key]}`);
-  return active.length ? active.join("  |  ") : "Sem filtros aplicados";
 }
