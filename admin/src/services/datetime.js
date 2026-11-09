@@ -51,6 +51,12 @@ export function todayIsoDate() {
   return toIsoDate(new Date());
 }
 
+// Soma (ou subtrai) dias a um "YYYY-MM-DD", no calendario local.
+export function addDays(isoDate, days) {
+  const [year, month, day] = String(isoDate).split("-").map(Number);
+  return toIsoDate(new Date(year, month - 1, day + days));
+}
+
 function toIsoDate(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");

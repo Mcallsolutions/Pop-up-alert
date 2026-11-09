@@ -28,7 +28,7 @@
 //   no orcamento da hora, mas nao e barrada por ele: e uma decisao do
 //   administrador.
 
-const { getAttendanceConfig, getInactivityThresholdMinutes, getRetentionDays } = require("../config/monitoring");
+const { getAttendanceConfig, getInactivityRecordMinutes, getRetentionDays } = require("../config/monitoring");
 const { getDatabase } = require("../database");
 const { normalizeAttendantName } = require("./attendant-filter");
 const { composeSystemPrompt, listPrompts } = require("./ai.service");
@@ -443,7 +443,7 @@ async function analyzeTicket({ ticketId, trigger, createdBy = null, manual = fal
   const endAt = closed ? Math.max(lastMessageAt, Number.isFinite(closedAt) ? closedAt : 0) : now.getTime();
 
   const metrics = computeAttendanceMetrics(window.messages, { endAt });
-  const systemAlerts = buildSystemAlerts(metrics, window.messages, { thresholdMinutes: getInactivityThresholdMinutes() });
+  const systemAlerts = buildSystemAlerts(metrics, window.messages, { thresholdMinutes: getInactivityRecordMinutes() });
   const base = {
     ticketId,
     attendant: pickAttendant(window.messages) || normalizeAttendantName(reading?.attendant || ""),

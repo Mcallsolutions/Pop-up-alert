@@ -192,7 +192,7 @@ SQLite local (`server/data/monitor.sqlite`). Cada coleta grava um snapshot e uma
 linha por ticket; os relatorios usam `external_ticket_id` (o id do ticket no
 MTalk) para ficar com uma leitura por ticket: a mais recente nos de TAG e a de
 maior parada no periodo nos de inatividade. Leituras com mais de
-`RETENTION_DAYS` dias (padrao 90) sao apagadas sozinhas.
+`RETENTION_DAYS` dias (padrao 60) sao apagadas sozinhas.
 
 Com a analise de atendimento ligada, as mensagens vao para a tabela `messages`
 **ja mascaradas** (so `body_masked`; o texto original nunca e gravado), com

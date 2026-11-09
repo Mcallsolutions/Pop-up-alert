@@ -8,6 +8,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { listMonitoredAttendants } = require("../services/attendant-filter");
 
 const DEFAULT_DATABASE_PATH = path.resolve(__dirname, "../../data/monitor.sqlite");
 
@@ -119,7 +120,12 @@ function runMigrations(connection) {
 
     connection.exec("BEGIN");
     try {
-      connection.exec(sql);
+      // Migracao em codigo (funcao) quando precisa contar/registrar o que fez.
+      if (typeof sql === "function") {
+        sql(connection);
+      } else {
+        connection.exec(sql);
+      }
       register.run(filename);
       connection.exec("COMMIT");
     } catch (error) {
@@ -333,12 +339,36 @@ const MIGRATIONS = {
     -- Prompts cadastrados valem para o resumo gerencial (RESUMO, como antes) ou
     -- para a analise de atendimento (ATENDIMENTO).
     ALTER TABLE ai_prompts ADD COLUMN scope TEXT NOT NULL DEFAULT 'RESUMO' CHECK (scope IN ('RESUMO', 'ATENDIMENTO'));
-  `
+  `,
+  // So os tickets sem atendente e os de listMonitoredAttendants() ficam no
+  // sistema. A coleta ja nao grava os demais; aqui sai, uma unica vez, o que
+  // foi gravado antes. IRREVERSIVEL (faca copia do .sqlite antes de atualizar).
+  "006_somente_atendentes_monitorados": purgeUnmonitoredAttendants
 };
+
+function purgeUnmonitoredAttendants(connection) {
+  const names = listMonitoredAttendants().map((name) => name.toUpperCase());
+  const placeholders = names.map(() => "?").join(", ");
+  const notMonitored = `trim(coalesce(attendant, '')) <> '' AND UPPER(trim(attendant)) NOT IN (${placeholders})`;
+  const run = (sql, ...args) => Number(connection.prepare(sql).run(...args).changes || 0);
+
+  const tickets = run(`DELETE FROM tickets WHERE ${notMonitored}`, ...names);
+  const analyses = run(`DELETE FROM attendance_analyses WHERE ${notMonitored}`, ...names);
+  // Conversa e cursor de leitura de ticket que nao esta mais no sistema.
+  const messages = run("DELETE FROM messages WHERE ticket_id NOT IN (SELECT external_ticket_id FROM tickets)");
+  const cursors = run("DELETE FROM message_sync WHERE ticket_id NOT IN (SELECT external_ticket_id FROM tickets)");
+
+  if (tickets || analyses || messages || cursors) {
+    console.log(
+      `[DB] Somente atendentes monitorados: ${tickets} leituras de ticket, ${analyses} analises, ${messages} mensagens e ${cursors} cursores de outros atendentes apagados.`
+    );
+  }
+}
 
 module.exports = {
   getDatabase,
-  initializeDatabase
+  initializeDatabase,
+  purgeUnmonitoredAttendants
 };
 
 if (require.main === module) {

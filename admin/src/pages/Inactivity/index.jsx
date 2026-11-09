@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import FilterBar, { describeFilters, emptyFilters } from "../../components/FilterBar";
+import Metric from "../../components/Metric";
+import MiniReport from "../../components/MiniReport";
+import Pagination from "../../components/Pagination";
 import { api } from "../../services/api";
 import { buildFileName, exportDocx, exportPdf } from "../../services/export";
 import { formatDateTime, formatMinutes, formatTicketDateTime } from "../../services/datetime";
@@ -12,6 +15,12 @@ import { describeStandard, formatPercent, standardTone } from "../../services/st
 const EXPORT_HEADERS = ["Cliente", "Fila", "Atendente", "Empresa", "Parado desde", "Maior parada", "URL"];
 // A exportacao leva a lista inteira do recorte, nao so a pagina da tela.
 const EXPORT_PAGE_SIZE = 1000;
+
+const inactivityColumns = [
+  { header: "Inativos", render: (row) => row.inactiveTickets },
+  { header: "Maior parada", render: (row) => formatMinutes(row.maxInactivityMinutes) },
+  { header: "Media", render: (row) => formatMinutes(row.averageInactivityMinutes) }
+];
 
 export default function Inactivity() {
   const [filters, setFilters] = useState(emptyFilters);
@@ -87,7 +96,7 @@ export default function Inactivity() {
     const data = await api.inactiveTickets({ ...applied, pageSize: EXPORT_PAGE_SIZE });
     return {
       title: "Tickets parados",
-      subtitle: [describeFilters(applied), `Limite: ${summary?.thresholdMinutes || 15} min`].join("  |  "),
+      subtitle: [describeFilters(applied), `Registro: ${summary?.thresholdMinutes || 18} min`].join("  |  "),
       headers: EXPORT_HEADERS,
       rows: (data.items || []).map((ticket) => [
         ticket.clientName,
@@ -123,8 +132,9 @@ export default function Inactivity() {
         <div>
           <h2>Dashboard de inatividade</h2>
           <p>
-            Tickets de clientes identificados que ficaram mais de {summary?.thresholdMinutes || 15} minutos sem nenhuma
-            atividade no periodo (a maior parada de cada um).
+            Tickets de clientes identificados que ficaram mais de {summary?.thresholdMinutes || 18} minutos sem nenhuma
+            atividade no periodo (a maior parada de cada um). O alerta da extensao avisa aos {summary?.alertMinutes || 15}{" "}
+            minutos; o registro so conta depois da margem para o atendente responder.
           </p>
         </div>
         <button
@@ -159,7 +169,10 @@ export default function Inactivity() {
         <Metric label="Clientes inativos" value={summary?.inactiveTickets || 0} tone="warning" />
         <Metric label="Maior parada" value={formatMinutes(summary?.maxInactivityMinutes)} tone="danger" />
         <Metric label="Media das paradas" value={formatMinutes(summary?.averageInactivityMinutes)} />
-        <Metric label="Limite" value={`${summary?.thresholdMinutes || 15} min`} />
+        <Metric
+          label={`Registro (alerta: ${summary?.alertMinutes || 15} min)`}
+          value={`${summary?.thresholdMinutes || 18} min`}
+        />
         <Metric label="Ultima coleta" value={formatDateTime(summary?.lastCollectedAt)} compact />
       </div>
 
@@ -201,48 +214,16 @@ export default function Inactivity() {
             </tbody>
           </table>
         </div>
-        {pagination && pagination.totalPaginas > 1 ? (
-          <nav className="pagination" aria-label="Paginacao dos tickets parados">
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={loading || pagination.pagina <= 1}
-              onClick={() => changePage(pagination.pagina - 1)}
-            >
-              Anterior
-            </button>
-            <span>
-              Pagina {pagination.pagina} de {pagination.totalPaginas} ({pagination.total}{" "}
-              {pagination.total === 1 ? "cliente" : "clientes"})
-            </span>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={loading || pagination.pagina >= pagination.totalPaginas}
-              onClick={() => changePage(pagination.pagina + 1)}
-            >
-              Proxima
-            </button>
-          </nav>
-        ) : null}
+        <Pagination pagination={pagination} loading={loading} onPage={changePage} label="Paginacao dos tickets parados" />
       </section>
 
       <StandardPanel standard={standard} />
 
       <div className="two-column">
-        <MiniReport title="Inatividade por atendente" rows={attendants} labelKey="attendant" />
-        <MiniReport title="Inatividade por empresa" rows={companies} labelKey="company" />
+        <MiniReport title="Inatividade por atendente" rows={attendants} labelKey="attendant" columns={inactivityColumns} />
+        <MiniReport title="Inatividade por empresa" rows={companies} labelKey="company" columns={inactivityColumns} />
       </div>
     </section>
-  );
-}
-
-function Metric({ label, value, tone = "default", compact = false }) {
-  return (
-    <article className={`metric-card ${tone}`}>
-      <span>{label}</span>
-      <strong className={compact ? "compact" : ""}>{value}</strong>
-    </article>
   );
 }
 
@@ -284,42 +265,6 @@ function StandardPanel({ standard }) {
             ) : (
               <tr>
                 <td colSpan="7">Sem dados.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
-function MiniReport({ title, rows, labelKey }) {
-  return (
-    <section className="table-panel">
-      <h3>{title}</h3>
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Nome</th>
-              <th>Inativos</th>
-              <th>Maior parada</th>
-              <th>Media</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length ? (
-              rows.map((row) => (
-                <tr key={row[labelKey] || "sem-identificacao"}>
-                  <td>{row[labelKey] || "-"}</td>
-                  <td>{row.inactiveTickets}</td>
-                  <td>{formatMinutes(row.maxInactivityMinutes)}</td>
-                  <td>{formatMinutes(row.averageInactivityMinutes)}</td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan="4">Sem dados.</td>
               </tr>
             )}
           </tbody>

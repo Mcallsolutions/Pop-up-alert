@@ -232,7 +232,12 @@ function fileNameFromDisposition(header) {
 function toQuery(filters) {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => {
-    if (value) params.set(key, value);
+    // Lista (varios atendentes): a chave se repete na query.
+    if (Array.isArray(value)) {
+      value.filter(Boolean).forEach((item) => params.append(key, item));
+    } else if (value) {
+      params.set(key, value);
+    }
   });
   const query = params.toString();
   return query ? `?${query}` : "";

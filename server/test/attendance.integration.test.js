@@ -27,14 +27,14 @@ const CLIENT_NAMES = {
   5006: "Beatriz Exemplar",
   5007: "Heitor Simulado"
 };
-// Paula nao tem token: o ticket 5006 fica fora do recorte da IA.
+// Guilherme nao tem token: o ticket 5006 fica fora do recorte da IA.
 const ATTENDANTS = {
   5001: "Stephanie",
-  5002: "Gabriel Oliveira",
-  5003: "Gabriel Oliveira",
+  5002: "Gabriell Carvalho",
+  5003: "Gabriell Carvalho",
   5004: "Stephanie",
   5005: "Stephanie",
-  5006: "Paula Andrade",
+  5006: "Guilherme Gomes",
   5007: "Stephanie"
 };
 // updatedAt do ticket: 5006 e o mais antigo, mas esta fora do recorte; entre os
@@ -75,9 +75,9 @@ const FORBIDDEN_FOR_OPENAI = [
   "Beatriz",
   "Heitor",
   "Stephanie",
-  "Gabriel",
-  "Oliveira",
-  "Paula",
+  "Gabriell",
+  "Carvalho",
+  "Guilherme",
   "0800 TESTE"
 ];
 
@@ -128,9 +128,9 @@ function buildMessages() {
   // Atendente sem token: se a leitura buscasse, a marca chegaria ao banco.
   messages[5006] = [
     msg(5006, 1, 170, { body: "texto fora-do-recorte do cliente" }),
-    msg(5006, 2, 168, { fromMe: true, body: "*Paula Andrade:*\nresposta fora-do-recorte" }),
+    msg(5006, 2, 168, { fromMe: true, body: "*Guilherme Gomes:*\nresposta fora-do-recorte" }),
     msg(5006, 3, 166, { body: "ok fora-do-recorte" }),
-    msg(5006, 4, 165, { fromMe: true, body: "*Paula Andrade:*\nencerrando fora-do-recorte" })
+    msg(5006, 4, 165, { fromMe: true, body: "*Guilherme Gomes:*\nencerrando fora-do-recorte" })
   ];
 
   // Fila de espera, assinatura de quem nao tem token e uma mensagem que a
@@ -140,7 +140,7 @@ function buildMessages() {
     msg(5007, 2, 149, { fromMe: true, body: "Digite 1 para suporte fora-do-recorte" }),
     msg(5007, 3, 129, { queueId: 7, body: "minha internet caiu" }),
     msg(5007, 4, 128, { queueId: 7, fromMe: true, body: "*Stephanie:*\nVou verificar" }),
-    msg(5007, 5, 126, { queueId: 7, fromMe: true, body: "*Paula Andrade:*\nentrei fora-do-recorte" }),
+    msg(5007, 5, 126, { queueId: 7, fromMe: true, body: "*Guilherme Gomes:*\nentrei fora-do-recorte" }),
     msg(5007, 6, 125, { queueId: 99, body: "pergunta no financeiro fora-do-recorte" }),
     msg(5007, 7, 124, { queueId: 7, body: "voltou" }),
     msg(5007, 8, 123, { queueId: 7, fromMe: true, body: "*Stephanie:*\nOtimo" })
@@ -361,7 +361,7 @@ test("com AI_ATTENDANCE_ANALYSIS=0 o sistema se comporta como antes", async () =
 test("teto de leituras por coleta, contado no diagnostico", async () => {
   const { createToken } = require(path.join(SRC, "services/token.service"));
   await createToken({ name: "Stephanie - teste", attendant: "Stephanie", role: "ATENDENTE" });
-  await createToken({ name: "Gabriel - teste", attendant: "gabriel oliveira", role: "ATENDENTE" });
+  await createToken({ name: "Gabriell - teste", attendant: "gabriell carvalho", role: "ATENDENTE" });
   await seedReadings();
 
   process.env.AI_ATTENDANCE_ANALYSIS = "1";
@@ -431,7 +431,7 @@ test("recorte: so os trechos com atendente vinculado em fila monitorada sao grav
   assert.ok(rows.every((row) => row.attendant === "Stephanie"));
 
   const status = await attendance.getAttendanceStatus();
-  assert.deepEqual(status.recorte.atendentesVinculados, ["Gabriel Oliveira", "Stephanie"]);
+  assert.deepEqual(status.recorte.atendentesVinculados, ["Gabriell Carvalho", "Stephanie"]);
   assert.equal(status.leitura.ultima.mensagensForaDoRecorte, 4, "as 4 do 5007 na ultima leitura");
   assert.equal(status.leitura.ultima.ticketsForaDoRecorte, 1, "o 5006");
 });
@@ -492,7 +492,7 @@ test("assertNoPii bloqueia um payload com dado cru: nada vai para a OpenAI", asy
   await db
     .prepare(
       `INSERT INTO messages (id, ticket_id, from_me, sender_kind, attendant, body_masked, pii_found, flags, created_at, collected_at)
-       VALUES ('ID-CRU', '5002', 0, 'CLIENTE', 'Gabriel Oliveira', 'meu cpf e 123.456.789-09', '{}', '[]', ?, ?)`
+       VALUES ('ID-CRU', '5002', 0, 'CLIENTE', 'Gabriell Carvalho', 'meu cpf e 123.456.789-09', '{}', '[]', ?, ?)`
     )
     .run(new Date(NOW - 100 * 60000).toISOString(), new Date().toISOString());
 
@@ -578,7 +578,7 @@ test("rotas: so o painel acessa, feature desligada responde 403", async () => {
 test("revogar o token tira o atendente da analise na hora", async () => {
   const { attendance } = modules();
   const { listTokens, revokeToken } = require(path.join(SRC, "services/token.service"));
-  const gabriel = (await listTokens()).items.find((item) => item.attendant === "Gabriel Oliveira" && item.isActive);
+  const gabriel = (await listTokens()).items.find((item) => item.attendant === "Gabriell Carvalho" && item.isActive);
   await revokeToken(gabriel.id);
 
   const leiturasAntes = messageRequests().length;

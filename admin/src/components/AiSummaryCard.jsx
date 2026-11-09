@@ -142,6 +142,9 @@ function describePeriod(filters) {
 
   const inicio = String(filters?.startDate || "").trim();
   const fim = String(filters?.endDate || "").trim();
+  if (inicio && inicio === fim) {
+    return `Periodo: ${formatDay(inicio)}`;
+  }
   if (inicio || fim) {
     return `Periodo: ${inicio ? formatDay(inicio) : "inicio"} ate ${fim ? formatDay(fim) : "hoje"}`;
   }

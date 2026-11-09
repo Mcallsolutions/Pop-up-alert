@@ -1,11 +1,18 @@
 const { getDatabase } = require("../database");
-const { getInactivityThresholdMinutes, getServiceStandardZeroMinutes } = require("../config/monitoring");
+const {
+  getInactivityRecordMinutes,
+  getInactivityThresholdMinutes,
+  getServiceStandardZeroMinutes
+} = require("../config/monitoring");
 const { buildServiceStandard } = require("./service-standard");
 const { getAllowedQueues } = require("./queue-filter");
 const { normalizeAttendantName } = require("./attendant-filter");
 const { toZonedIso } = require("./time-zone");
 
-const INACTIVITY_THRESHOLD_MINUTES = getInactivityThresholdMinutes();
+// Os relatorios contam a parada so depois do limite de REGISTRO (18 min), que e
+// maior que o do alerta (15 min): a margem para o atendente responder.
+const INACTIVITY_THRESHOLD_MINUTES = getInactivityRecordMinutes();
+const ALERT_MINUTES = getInactivityThresholdMinutes();
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Clientes por pagina na "Lista de tickets sem TAG" do painel. A exportacao
 // pede tudo de uma vez com pageSize (ate MAX_LIST_ROWS).
@@ -73,36 +80,32 @@ function buildPeakInactivitySql(where, scopeSql) {
 
 // Prefixo do PADRAO DE ATENDIMENTO: de cada ticket, a maior parada do periodo
 // (pico, com o recorte do token e o atendente daquele momento) e o status de TAG
-// da leitura mais recente (ultima). As duas leituras partem do mesmo WHERE, entao
-// os parametros dele aparecem duas vezes e o recorte do token vem depois.
+// da leitura mais recente (ultima). Uma varredura so da tabela: as duas posicoes
+// (rnUltima e rnPico) saem da mesma CTE, que o SQLite materializa para as duas
+// referencias. O recorte do token vale so para o pico.
 function buildStandardSql(where, scopeSql) {
   return `
-      WITH todas_leituras AS (
+      WITH leituras AS (
         SELECT *,
           ROW_NUMBER() OVER (
             PARTITION BY external_ticket_id
             ORDER BY datetime(collected_at) DESC, id DESC
-          ) AS rowNumber
+          ) AS rnUltima,
+          ROW_NUMBER() OVER (
+            PARTITION BY external_ticket_id
+            ORDER BY COALESCE(inactivity_minutes, 0) DESC, datetime(collected_at) DESC, id DESC
+          ) AS rnPico
         FROM tickets
         ${where}
       ),
       ultima AS (
         SELECT external_ticket_id AS ultimaTicketId, tag_status AS ultimaTagStatus
-        FROM todas_leituras
-        WHERE rowNumber = 1
-      ),
-      leituras_por_parada AS (
-        SELECT *,
-          ROW_NUMBER() OVER (
-            PARTITION BY external_ticket_id
-            ORDER BY COALESCE(inactivity_minutes, 0) DESC, datetime(collected_at) DESC, id DESC
-          ) AS rowNumber
-        FROM tickets
-        ${where}
+        FROM leituras
+        WHERE rnUltima = 1
       ),
       pico AS (
-        SELECT * FROM leituras_por_parada
-        WHERE rowNumber = 1${scopeSql ? ` AND ${scopeSql}` : ""}
+        SELECT * FROM leituras
+        WHERE rnPico = 1${scopeSql ? ` AND ${scopeSql}` : ""}
       )`;
 }
 
@@ -176,6 +179,7 @@ async function getSummary(filters = {}) {
     totalWithoutAttendant: Number(row?.totalWithoutAttendant || 0),
     totalInactive: Number(inactive?.totalInactive || 0),
     thresholdMinutes: INACTIVITY_THRESHOLD_MINUTES,
+    alertMinutes: ALERT_MINUTES,
     compliancePercent,
     lastCollectedAt: row?.lastCollectedAt || null
   };
@@ -324,6 +328,7 @@ async function getInactivitySummary(filters = {}) {
 
   return {
     thresholdMinutes: INACTIVITY_THRESHOLD_MINUTES,
+    alertMinutes: ALERT_MINUTES,
     inactiveTickets: Number(row?.inactiveTickets || 0),
     maxInactivityMinutes: Number(row?.maxInactivityMinutes || 0),
     averageInactivityMinutes: roundAverage(row?.averageInactivityMinutes),
@@ -405,7 +410,7 @@ async function getInactivityGroupedBy(filters, expression, alias, extraCondition
 // junta inatividade e TAG, em media geral e por atendente.
 async function getServiceStandard(filters = {}) {
   const database = await getDatabase();
-  const { standardParams, standardSql } = buildTicketFilters(filters);
+  const { params, standardSql } = buildTicketFilters(filters);
   const rows = await database
     .prepare(
       `
@@ -420,7 +425,7 @@ async function getServiceStandard(filters = {}) {
       WHERE ${IDENTIFIED_TICKET_SQL}
     `
     )
-    .all(...standardParams);
+    .all(...params);
 
   const tickets = rows.map((row) => ({
     attendant: row.attendant,
@@ -506,10 +511,8 @@ function buildTicketFilters(filters = {}, { since = "" } = {}) {
     rankedSql: buildRankedTicketsSql(baseWhere, scope.sql),
     // Consultas de inatividade: a leitura de maior parada de cada ticket.
     peakSql: buildPeakInactivitySql(baseWhere, scope.sql),
-    // Padrao de atendimento: usa pico e ultima leitura, por isso o WHERE entra
-    // duas vezes (standardParams).
-    standardSql: buildStandardSql(baseWhere, scope.sql),
-    standardParams: [...params, ...params, ...scope.params]
+    // Padrao de atendimento: pico e ultima leitura numa varredura so.
+    standardSql: buildStandardSql(baseWhere, scope.sql)
   };
 }
 
@@ -572,15 +575,28 @@ function addLikeFilter(conditions, params, column, value) {
 
 // O atendente ja e gravado normalizado ("Alek" vira "Aleksandro"), entao a
 // busca tenta o texto digitado e tambem o nome canonico dele.
+//
+// value aceita um nome ou uma lista (varios atendentes no mesmo filtro, ?attendant=A&attendant=B):
+// o ticket entra se bater com QUALQUER um deles.
 function addAttendantFilter(conditions, params, value, column = "attendant") {
-  const cleanValue = String(value || "").trim();
-  if (!cleanValue) {
+  const names = toFilterList(value);
+  if (!names.length) {
     return;
   }
 
-  const normalized = normalizeAttendantName(cleanValue) || cleanValue;
-  conditions.push(`(UPPER(${column}) LIKE UPPER(?) OR UPPER(${column}) LIKE UPPER(?))`);
-  params.push(`%${cleanValue}%`, `%${normalized}%`);
+  const alternatives = [];
+  for (const name of names) {
+    const normalized = normalizeAttendantName(name) || name;
+    alternatives.push(`UPPER(${column}) LIKE UPPER(?)`, `UPPER(${column}) LIKE UPPER(?)`);
+    params.push(`%${name}%`, `%${normalized}%`);
+  }
+  conditions.push(`(${alternatives.join(" OR ")})`);
+}
+
+// Um valor de filtro (texto ou lista) como lista de nomes sem vazios nem repetidos.
+function toFilterList(value) {
+  const items = Array.isArray(value) ? value : [value];
+  return [...new Set(items.map((item) => String(item ?? "").trim()).filter(Boolean))];
 }
 
 function addNormalizedLikeFilter(conditions, params, column, value) {
@@ -718,6 +734,7 @@ module.exports = {
   addLikeFilter,
   addNormalizedLikeFilter,
   appendDateRange,
+  toFilterList,
   getSummary,
   getFilterOptions,
   getMissingTags,

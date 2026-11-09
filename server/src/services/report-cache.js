@@ -55,8 +55,17 @@ async function getCachedReport(name, filters, loader, { fresh = false } = {}) {
 }
 
 function buildCacheKey(name, filters = {}) {
-  const parts = KEY_FIELDS.map((field) => [field, String(filters[field] ?? "").trim()]).filter(([, value]) => value);
+  const parts = KEY_FIELDS.map((field) => [field, keyValue(filters[field])]).filter(([, value]) => value);
   return `${name}?${new URLSearchParams(parts).toString()}`;
+}
+
+// Lista de valores (varios atendentes) vira texto em ordem fixa: A+B e B+A
+// compartilham a mesma resposta guardada.
+function keyValue(value) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => String(item ?? "").trim()).filter(Boolean))].sort().join("|");
+  }
+  return String(value ?? "").trim();
 }
 
 function store(key, entry) {

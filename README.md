@@ -278,7 +278,9 @@ Coleta e alertas:
   nem diagnostico: a resposta traz so os totais do recorte dele, e uma coleta que terminou ha menos de 30 s e
   reaproveitada em vez de chamar o MTalk de novo
 
-Relatorios (todos aceitam `day` ou o periodo `startDate`/`endDate`, `YYYY-MM-DD`, inclusivos; o dia tem prioridade):
+**Regras de entrada (fixas no codigo):** so entram no sistema os tickets **sem atendente** e os dos atendentes Guilherme Gomes, Gabriell Carvalho, Luis otavio, Stephanie e Aleksandro (`MONITORED_ATTENDANTS` em `attendant-filter.js`); o resto e descartado na coleta, e a migracao `006` apagou uma vez o historico dos demais (**irreversivel: copie o .sqlite antes de atualizar**). O alerta de inatividade segue em 15 min (`INACTIVITY_THRESHOLD_MINUTES`), mas o **registro** (relatorios, inativos, padrao de atendimento) so conta depois de 18 min (`INACTIVITY_RECORD_MINUTES`), margem para o atendente responder.
+
+Relatorios (todos aceitam o periodo `startDate`/`endDate` (`YYYY-MM-DD`, inclusivos; `day` segue aceito) e `attendant` repetido para varios atendentes, como `?attendant=Stephanie&attendant=Aleksandro`):
 
 - `GET /api/reports/summary`
 - `GET /api/reports/filters` (valores disponiveis para os filtros do painel)
@@ -585,7 +587,7 @@ O filtro de dia usa o fuso `MONITOR_TIME_ZONE` (padrao `America/Sao_Paulo`).
 
 SQLite em `server/data/monitor.sqlite` (ou `SQLITE_PATH`). As migrations ficam em `server/src/database/index.js` (constante `MIGRATIONS`) e rodam ao subir a API, controladas pela tabela `schema_migrations`. Para adicionar uma, crie uma nova chave — nunca edite uma que ja rodou.
 
-**Retencao:** cada coleta grava de novo todos os tickets em atendimento (uma linha por ticket por minuto), entao as leituras com mais de `RETENTION_DAYS` dias (padrao **90**; `0` guarda tudo) sao apagadas sozinhas — depois de uma coleta, no maximo a cada 6 horas e em lotes, para nao travar a API. As analises de atendimento seguem o mesmo `RETENTION_DAYS`; as mensagens mascaradas e os cursores de leitura, `MESSAGE_RETENTION_DAYS` (padrao **30**, e aqui `0` nao desliga). O arquivo do SQLite nao encolhe: o espaco liberado e reaproveitado pelas coletas seguintes.
+**Retencao:** cada coleta grava de novo todos os tickets em atendimento (uma linha por ticket por minuto), entao as leituras com mais de `RETENTION_DAYS` dias (padrao **60**; `0` guarda tudo) sao apagadas sozinhas — depois de uma coleta, no maximo a cada 6 horas e em lotes, para nao travar a API. As analises de atendimento seguem o mesmo `RETENTION_DAYS`; as mensagens mascaradas e os cursores de leitura, `MESSAGE_RETENTION_DAYS` (padrao **30**, e aqui `0` nao desliga). O arquivo do SQLite nao encolhe: o espaco liberado e reaproveitado pelas coletas seguintes.
 
 ## Seguranca e LGPD
 
@@ -601,7 +603,7 @@ atendentes ja estao numa mesma rede ou VPN, restringir o nginx por IP tira o pai
 
 Para os relatorios e alertas, o projeto coleta apenas: cliente, fila, atendente, conexao, horario, TAGs, status e
 identificadores do ticket. Ele nunca faz escrita no atendimento: o cliente HTTP do MTalk so tem `GET`. O historico de
-coletas e apagado depois de `RETENTION_DAYS` dias (padrao 90).
+coletas e apagado depois de `RETENTION_DAYS` dias (padrao 60).
 
 **WhatsApp.** Com os [alertas no WhatsApp](#alertas-no-whatsapp) ligados, fila, atendente, conexao, tempo parado e o
 link do ticket saem do servidor para o provedor escolhido (e, no CallMeBot, para um servico de terceiro). O nome do

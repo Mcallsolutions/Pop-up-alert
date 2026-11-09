@@ -40,7 +40,8 @@ const { getInactiveTickets, getMissingTags, getServiceStandard } = require(path.
 const { buildServiceStandard, inactivityScore, scoreTicket } = require(path.join(SRC, "services/service-standard"));
 const { getServiceStandardZeroMinutes } = require(path.join(SRC, "config/monitoring"));
 
-const OPTIONS = { thresholdMinutes: 15, zeroMinutes: 60 };
+// Limite de REGISTRO (18 min), nao o do alerta (15): ver getInactivityRecordMinutes.
+const OPTIONS = { thresholdMinutes: 18, zeroMinutes: 60 };
 
 function ticket(id, { tags = ["Cliente"], attendant = "Atendente A", minutes = 3, clientName } = {}) {
   return {
@@ -69,8 +70,9 @@ function dayAgo(days) {
 
 test("nota de inatividade: 100 ate o limite e cai em linha reta ate zerar", () => {
   assert.equal(inactivityScore(0, OPTIONS), 100);
-  assert.equal(inactivityScore(15, OPTIONS), 100, "no limite ainda nao desconta");
-  assert.equal(inactivityScore(37.5, OPTIONS), 50);
+  assert.equal(inactivityScore(18, OPTIONS), 100, "no limite ainda nao desconta");
+  assert.equal(inactivityScore(15, OPTIONS), 100, "a margem de 15 a 18 min nao desconta");
+  assert.equal(inactivityScore(39, OPTIONS), 50);
   assert.equal(inactivityScore(60, OPTIONS), 0);
   assert.equal(inactivityScore(600, OPTIONS), 0, "nunca fica negativa");
   assert.equal(inactivityScore(null, OPTIONS), 100);
@@ -82,7 +84,7 @@ test("nota do ticket: metade TAG, metade inatividade; sem atendente so inativida
   assert.equal(scoreTicket({ inactivityMinutes: 60, hasResponsible: true, hasTag: true }, OPTIONS).score, 50);
   assert.equal(scoreTicket({ inactivityMinutes: 60, hasResponsible: true, hasTag: false }, OPTIONS).score, 0);
 
-  const aguardando = scoreTicket({ inactivityMinutes: 37.5, hasResponsible: false, hasTag: false }, OPTIONS);
+  const aguardando = scoreTicket({ inactivityMinutes: 39, hasResponsible: false, hasTag: false }, OPTIONS);
   assert.equal(aguardando.score, 50, "ticket sem atendente nao e cobrado pela TAG");
   assert.equal(aguardando.tag, null);
 });
@@ -135,21 +137,21 @@ test("padrao geral e por atendente: pico de parada + TAG da leitura mais recente
 
   // 6 tickets avaliados (o sem nome de contato fica de fora).
   assert.equal(padrao.tickets, 6);
-  assert.equal(padrao.percent, 70.4);
-  assert.equal(padrao.inactivityPercent, 63);
+  assert.equal(padrao.percent, 71.8);
+  assert.equal(padrao.inactivityPercent, 65.1);
   assert.equal(padrao.tagPercent, 80, "so os 5 que tem atendente entram na parte da TAG");
   assert.equal(padrao.inactiveTickets, 4);
   assert.equal(padrao.withoutTag, 1);
-  assert.equal(padrao.thresholdMinutes, 15);
+  assert.equal(padrao.thresholdMinutes, 18);
   assert.equal(padrao.zeroMinutes, 60);
 
   // Do pior para o melhor; ticket sem atendente so conta no geral.
   assert.deepEqual(
     padrao.items.map((item) => [item.attendant, item.tickets, item.percent]),
     [
-      ["Atendente C", 1, 61.1],
+      ["Atendente C", 1, 61.9],
       ["Atendente A", 3, 66.7],
-      ["Atendente B", 1, 94.4]
+      ["Atendente B", 1, 97.6]
     ]
   );
 });
@@ -157,7 +159,7 @@ test("padrao geral e por atendente: pico de parada + TAG da leitura mais recente
 test("periodo personalizado separa o ticket de 20 dias atras", async () => {
   const antigo = await getServiceStandard({ startDate: dayAgo(25), endDate: dayAgo(15) });
   assert.equal(antigo.tickets, 1);
-  assert.equal(antigo.percent, 22.2, "sem TAG (0) e 40 min parado (44,4)");
+  assert.equal(antigo.percent, 23.8, "sem TAG (0) e 40 min parado (47,6)");
 
   const recente = await getServiceStandard({ startDate: dayAgo(2), endDate: dayAgo(0) });
   assert.equal(recente.tickets, 6);
@@ -241,7 +243,7 @@ test("rotas: inativos paginados e padrao de atendimento exigem login", async () 
   const padrao = await fetch(`${api}/api/reports/service-standard?${query}`, { headers: painel }).then((response) =>
     response.json()
   );
-  assert.equal(padrao.percent, 70.4);
+  assert.equal(padrao.percent, 71.8);
 
   const invalida = await fetch(`${api}/api/reports/service-standard?startDate=2026-09-31`, { headers: painel });
   assert.equal(invalida.status, 400, "data impossivel no periodo vira 400");

@@ -335,7 +335,9 @@ cd /opt/tag-monitor && sudo -u tag-monitor node server/src/scripts/tokens.js lis
 
 ## 14. Backup do banco
 
-O banco e o historico de coletas dos ultimos `RETENTION_DAYS` dias (padrao 90; as leituras mais velhas sao apagadas
+> **Antes de atualizar para a versao com `MONITORED_ATTENDANTS`:** copie `data/monitor.sqlite` (ou o `SQLITE_PATH`). Na primeira subida a migracao `006` apaga, de forma irreversivel, as leituras, analises e mensagens de quem nao e dos 5 atendentes monitorados.
+
+O banco e o historico de coletas dos ultimos `RETENTION_DAYS` dias (padrao 60; as leituras mais velhas sao apagadas
 sozinhas). Com WAL ligado, copiar o arquivo com a API rodando produz backup incompleto — use o `.backup` do SQLite.
 Crie o script:
 

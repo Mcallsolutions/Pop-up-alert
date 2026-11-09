@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import FilterBar, { emptyFilters } from "../../components/FilterBar";
 import AiSummaryCard from "../../components/AiSummaryCard";
+import Metric from "../../components/Metric";
+import MiniReport, { tagColumns } from "../../components/MiniReport";
 import { api } from "../../services/api";
 import { formatDateTime, formatTime } from "../../services/datetime";
 import { readPageCache, writePageCache } from "../../services/page-cache";
@@ -113,6 +115,12 @@ export default function Dashboard() {
   }
 
   const busy = loading || refreshing;
+  // Por atendente: as colunas de TAG e o padrao de atendimento de cada um.
+  const standardByName = new Map((standard?.items || []).map((item) => [item.attendant, item.percent]));
+  const attendantColumns = [
+    ...tagColumns,
+    { header: "Padrao", render: (row) => formatPercent(standardByName.get(row.attendant) ?? null) }
+  ];
 
   return (
     <section className="page-stack">
@@ -151,7 +159,7 @@ export default function Dashboard() {
         <Metric label="Tickets sem TAG" value={summary?.totalWithoutTag || 0} tone="danger" />
         <Metric label="Aguardando atendente" value={summary?.totalWithoutAttendant || 0} />
         <Metric
-          label={`Inativos +${summary?.thresholdMinutes || 15} min`}
+          label={`Inativos +${summary?.thresholdMinutes || 18} min`}
           value={summary?.totalInactive || 0}
           tone="warning"
         />
@@ -171,69 +179,24 @@ export default function Dashboard() {
       />
 
       <div className="two-column">
-        <ReportTable
+        <MiniReport
           title="Por atendente"
           rows={attendants}
           labelKey="attendant"
+          columns={attendantColumns}
+          limit={8}
           loading={loading}
-          standards={standard?.items}
+          emptyText="Sem dados recebidos."
         />
-        <ReportTable title="Por fila" rows={queues} labelKey="queue" loading={loading} />
-      </div>
-    </section>
-  );
-}
-
-function Metric({ label, value, tone = "default", compact = false }) {
-  return (
-    <article className={`metric-card ${tone}`}>
-      <span>{label}</span>
-      <strong className={compact ? "compact" : ""}>{value}</strong>
-    </article>
-  );
-}
-
-// standards (opcional): padrao de atendimento por nome, vira a coluna "Padrao".
-function ReportTable({ title, rows, labelKey, loading, standards }) {
-  const standardByName = standards ? new Map(standards.map((item) => [item[labelKey], item.percent])) : null;
-  const columns = standardByName ? 5 : 4;
-
-  return (
-    <section className="table-panel">
-      <h3>{title}</h3>
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Nome</th>
-              <th>Total</th>
-              <th>Sem TAG</th>
-              <th>Falha</th>
-              {standardByName ? <th>Padrao</th> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={columns}>Carregando...</td>
-              </tr>
-            ) : rows.length ? (
-              rows.slice(0, 8).map((row) => (
-                <tr key={row[labelKey]}>
-                  <td>{row[labelKey]}</td>
-                  <td>{row.totalTickets}</td>
-                  <td>{row.totalWithoutTag}</td>
-                  <td>{row.failurePercent}%</td>
-                  {standardByName ? <td>{formatPercent(standardByName.get(row[labelKey]) ?? null)}</td> : null}
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan={columns}>Sem dados recebidos.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <MiniReport
+          title="Por fila"
+          rows={queues}
+          labelKey="queue"
+          columns={tagColumns}
+          limit={8}
+          loading={loading}
+          emptyText="Sem dados recebidos."
+        />
       </div>
     </section>
   );
