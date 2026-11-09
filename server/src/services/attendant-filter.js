@@ -10,6 +10,11 @@ const ATTENDANT_ALIASES = new Map([
   ["ALEK", "Aleksandro"],
   ["ALEKSANDRO", "Aleksandro"]
 ]);
+// Unicos atendentes levados ao sistema (nomes canonicos de ATTENDANT_ALIASES),
+// alem dos tickets sem atendente. O que e de qualquer outra pessoa nem chega a
+// ser gravado: ver isMonitoredAttendant.
+const MONITORED_ATTENDANTS = ["Guilherme Gomes", "Gabriell Carvalho", "Luis otavio", "Stephanie", "Aleksandro"];
+const MONITORED_KEYS = new Set(MONITORED_ATTENDANTS.map((name) => name.toUpperCase()));
 // Sufixos de empresa/conexao que alguns cadastros levam junto do nome.
 const COMPANY_TOKENS = ["NETFIBRA", "MIX", "IDEZ", "TERRA", "TERRANET", "MIXTEL", "TELECOM", "BDG", "AIA"];
 
@@ -39,6 +44,17 @@ function normalizeAttendantName(value) {
 // recorte dos alertas (scopeTickets no coletor).
 function attendantKey(value) {
   return normalizeAttendantName(value).toUpperCase();
+}
+
+// Ticket sem atendente (aguardando na fila) sempre entra: ninguem e dono dele.
+// Com atendente, so os de MONITORED_ATTENDANTS (apelidos viram o nome canonico).
+function isMonitoredAttendant(value) {
+  const key = attendantKey(value);
+  return !key || MONITORED_KEYS.has(key);
+}
+
+function listMonitoredAttendants() {
+  return [...MONITORED_ATTENDANTS];
 }
 
 // Nomes conhecidos (canonicos e apelidos). O mascaramento de mensagens
@@ -74,7 +90,9 @@ function cleanText(value) {
 
 module.exports = {
   attendantKey,
+  isMonitoredAttendant,
   listCompanyTokens,
+  listMonitoredAttendants,
   listKnownAttendantNames,
   normalizeAttendantName
 };

@@ -441,7 +441,14 @@ function normalizeSummaryRow(row) {
 function cleanFilters(filters = {}) {
   const allowed = ["day", "startDate", "endDate", "attendant", "company", "queue", "clientName"];
   return allowed.reduce((acc, key) => {
-    const value = String(filters?.[key] || "").trim();
+    // attendant pode ser lista (varios atendentes no mesmo recorte).
+    const raw = filters?.[key];
+    if (Array.isArray(raw)) {
+      const list = [...new Set(raw.map((item) => String(item || "").trim()).filter(Boolean))];
+      if (list.length) acc[key] = list;
+      return acc;
+    }
+    const value = String(raw || "").trim();
     if (value) acc[key] = value;
     return acc;
   }, {});

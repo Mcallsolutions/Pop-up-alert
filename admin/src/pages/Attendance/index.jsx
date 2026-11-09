@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Headset, RefreshCw, RotateCw, ShieldAlert, X } from "lucide-react";
-import FilterBar, { emptyFilters } from "../../components/FilterBar";
+import FilterBar, { describeFilters, emptyFilters } from "../../components/FilterBar";
+import Metric from "../../components/Metric";
+import Pagination from "../../components/Pagination";
 import { api } from "../../services/api";
 import { buildFileName, exportDocx, exportPdf } from "../../services/export";
 import { formatDateTime, formatMinutes } from "../../services/datetime";
@@ -169,7 +171,7 @@ export default function AttendancePage() {
     const all = await fetchAllAnalyses();
     return {
       title: "Analise de atendimento (IA)",
-      subtitle: describeFilters({ ...filters, ...extra }),
+      subtitle: describeFilters({ ...filters, ...extra }, EXTRA_LABELS),
       headers: EXPORT_HEADERS,
       rows: all.map((item) => [
         formatDateTime(item.createdAt),
@@ -355,29 +357,13 @@ export default function AttendancePage() {
             </tbody>
           </table>
         </div>
-        {pagination && pagination.totalPaginas > 1 ? (
-          <nav className="pagination" aria-label="Paginacao das analises">
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={loading || pagination.pagina <= 1}
-              onClick={() => load(filters, extra, pagination.pagina - 1)}
-            >
-              Anterior
-            </button>
-            <span>
-              Pagina {pagination.pagina} de {pagination.totalPaginas} ({pagination.total} atendimentos)
-            </span>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={loading || pagination.pagina >= pagination.totalPaginas}
-              onClick={() => load(filters, extra, pagination.pagina + 1)}
-            >
-              Proxima
-            </button>
-          </nav>
-        ) : null}
+        <Pagination
+          pagination={pagination}
+          loading={loading}
+          onPage={(page) => load(filters, extra, page)}
+          label="Paginacao das analises"
+          noun={["atendimento", "atendimentos"]}
+        />
       </section>
 
       <section className="table-panel">
@@ -609,14 +595,6 @@ function Stat({ label, value }) {
   );
 }
 
-function Metric({ label, value, tone = "default" }) {
-  return (
-    <article className={`metric-card ${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
-  );
-}
 
 function countAlerts(item) {
   return (item.systemAlerts?.length || 0) + (item.content?.alertas?.length || 0);
@@ -637,20 +615,10 @@ function describeSystemAlert(alerta) {
   return "";
 }
 
-function describeFilters(filters) {
-  const labels = {
-    day: "Dia",
-    attendant: "Atendente",
-    company: "Empresa",
-    queue: "Fila",
-    clientName: "Cliente",
-    riscoCancelamento: "Risco",
-    sentimentoCliente: "Sentimento",
-    desfecho: "Desfecho",
-    notaMax: "Nota ate"
-  };
-  const active = Object.entries(labels)
-    .filter(([key]) => String(filters[key] || "").trim())
-    .map(([key, label]) => `${label}: ${filters[key]}`);
-  return active.length ? active.join("  |  ") : "Sem filtros aplicados";
-}
+// Filtros proprios desta pagina, alem dos da barra (describeFilters do FilterBar).
+const EXTRA_LABELS = {
+  riscoCancelamento: "Risco",
+  sentimentoCliente: "Sentimento",
+  desfecho: "Desfecho",
+  notaMax: "Nota ate"
+};

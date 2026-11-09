@@ -3,7 +3,12 @@
 // Filas e atendentes ficam em services/queue-filter.js e
 // services/attendant-filter.js, que ja sao a fonte unica desses dois.
 
+// Alerta: o pop-up da extensao e o aviso no WhatsApp disparam depois disso.
 const DEFAULT_INACTIVITY_THRESHOLD_MINUTES = 15;
+// Registro: relatorios, inativos e padrao de atendimento so contam o ticket
+// depois disso. A diferenca para o alerta e a margem para o atendente responder
+// o cliente antes de a parada virar ocorrencia.
+const DEFAULT_INACTIVITY_RECORD_MINUTES = 18;
 // Teto de tickets por snapshot: maxPages x pageSize por status monitorado.
 const MAX_TICKETS_PER_SNAPSHOT = 500;
 const DEFAULT_MTALK_BASE_URL = "https://s11.mtalk.com.br/backend";
@@ -36,7 +41,7 @@ const DEFAULT_TICKET_STATUSES = ["open", "pending"];
 const DEFAULT_TIME_ZONE = "America/Sao_Paulo";
 // Dias de historico de coletas no banco. Cada coleta grava de novo todos os
 // tickets em atendimento, entao sem limite o banco so cresce.
-const DEFAULT_RETENTION_DAYS = 90;
+const DEFAULT_RETENTION_DAYS = 60;
 // Cliente sem TAG cuja ultima leitura e mais velha que isso sai sozinho da
 // "Lista de tickets sem TAG". O historico continua no banco (RETENTION_DAYS)
 // para os outros relatorios.
@@ -55,17 +60,26 @@ const DEFAULT_AI_ANALYSIS_MIN_MESSAGES = 4;
 const DEFAULT_AI_ANALYSIS_MAX_MESSAGES = 80;
 const DEFAULT_AI_ANALYSIS_MAX_PER_HOUR = 30;
 
+// Limite do ALERTA (pop-up e WhatsApp).
 function getInactivityThresholdMinutes() {
   return readPositiveInteger(process.env.INACTIVITY_THRESHOLD_MINUTES, DEFAULT_INACTIVITY_THRESHOLD_MINUTES);
 }
 
+// Limite do REGISTRO (relatorios e padrao de atendimento). Nunca fica abaixo do
+// limite do alerta: o que alerta aos 15 min so vira ocorrencia depois da margem.
+function getInactivityRecordMinutes() {
+  const record = readPositiveInteger(process.env.INACTIVITY_RECORD_MINUTES, DEFAULT_INACTIVITY_RECORD_MINUTES);
+  return Math.max(record, getInactivityThresholdMinutes());
+}
+
 // Minutos parado em que a nota de inatividade do "padrao de atendimento" chega a
-// zero (ver service-standard.js). Padrao: 4x o limite de inatividade. Valor
-// menor ou igual ao limite nao faz sentido e volta ao padrao.
+// zero (ver service-standard.js). Padrao: 4x o limite do alerta. Valor menor ou
+// igual ao limite de registro nao faz sentido e volta ao padrao.
 function getServiceStandardZeroMinutes() {
-  const threshold = getInactivityThresholdMinutes();
-  const configured = readPositiveInteger(process.env.SERVICE_STANDARD_ZERO_MINUTES, threshold * 4);
-  return configured > threshold ? configured : threshold * 4;
+  const record = getInactivityRecordMinutes();
+  const fallback = Math.max(getInactivityThresholdMinutes() * 4, record + 1);
+  const configured = readPositiveInteger(process.env.SERVICE_STANDARD_ZERO_MINUTES, fallback);
+  return configured > record ? configured : fallback;
 }
 
 function getTimeZone() {
@@ -213,6 +227,7 @@ function normalizeToken(value) {
 module.exports = {
   MAX_TICKETS_PER_SNAPSHOT,
   getAttendanceConfig,
+  getInactivityRecordMinutes,
   getInactivityThresholdMinutes,
   getMissingTagListDays,
   getMtalkConfig,

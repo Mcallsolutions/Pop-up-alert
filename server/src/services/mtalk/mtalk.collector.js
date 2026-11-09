@@ -17,7 +17,7 @@
 // A autenticacao (URL + token) fica em mtalk.client.js.
 
 const { MAX_TICKETS_PER_SNAPSHOT, getInactivityThresholdMinutes, getMtalkConfig } = require("../../config/monitoring");
-const { normalizeAttendantName } = require("../attendant-filter");
+const { isMonitoredAttendant, normalizeAttendantName } = require("../attendant-filter");
 const { getAllowedQueues, normalizeQueueName } = require("../queue-filter");
 const { purgeOldReadingsIfDue } = require("../retention.service");
 const { startAttendanceWork } = require("../attendance-analysis.service");
@@ -69,9 +69,12 @@ async function collectFromMtalk({ persist = true } = {}) {
   // O ticket cru anda junto do mapeado: fillContactTags precisa dos dois para
   // remapear so quem ainda parece sem TAG.
   const mapOptions = { now, tagCatalog, panelUrl: config.panelUrl };
+  // So entram os tickets sem atendente e os dos atendentes monitorados. O corte
+  // vem antes de fillContactTags: nao se gasta consulta de contato com quem sera
+  // descartado.
   const mapeados = uniqueTickets
     .map((apiTicket) => ({ apiTicket, ticket: mapApiTicket(apiTicket, mapOptions) }))
-    .filter((item) => item.ticket);
+    .filter((item) => item.ticket && isMonitoredAttendant(item.ticket.attendant));
 
   await fillContactTags({ config, items: mapeados, tagCatalog, now, requests });
 

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import FilterBar, { describeFilters, emptyFilters } from "../../components/FilterBar";
+import MiniReport, { tagColumns } from "../../components/MiniReport";
+import Pagination from "../../components/Pagination";
 import { api } from "../../services/api";
 import { buildFileName, exportDocx, exportPdf } from "../../services/export";
 import { formatDateTime, formatMinutes, formatTicketDateTime } from "../../services/datetime";
@@ -206,71 +208,12 @@ export default function Reports() {
             </tbody>
           </table>
         </div>
-        {pagination && pagination.totalPaginas > 1 ? (
-          <nav className="pagination" aria-label="Paginacao dos tickets sem TAG">
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={loading || pagination.pagina <= 1}
-              onClick={() => changePage(pagination.pagina - 1)}
-            >
-              Anterior
-            </button>
-            <span>
-              Pagina {pagination.pagina} de {pagination.totalPaginas} ({pagination.total}{" "}
-              {pagination.total === 1 ? "cliente" : "clientes"})
-            </span>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={loading || pagination.pagina >= pagination.totalPaginas}
-              onClick={() => changePage(pagination.pagina + 1)}
-            >
-              Proxima
-            </button>
-          </nav>
-        ) : null}
+        <Pagination pagination={pagination} loading={loading} onPage={changePage} label="Paginacao dos tickets sem TAG" />
       </section>
 
       <div className="two-column">
-        <MiniReport title="Falhas por atendente" rows={attendants} labelKey="attendant" />
-        <MiniReport title="Falhas por fila" rows={queues} labelKey="queue" />
-      </div>
-    </section>
-  );
-}
-
-function MiniReport({ title, rows, labelKey }) {
-  return (
-    <section className="table-panel">
-      <h3>{title}</h3>
-      <div className="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>Nome</th>
-              <th>Total</th>
-              <th>Sem TAG</th>
-              <th>Falha</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length ? (
-              rows.map((row) => (
-                <tr key={row[labelKey]}>
-                  <td>{row[labelKey]}</td>
-                  <td>{row.totalTickets}</td>
-                  <td>{row.totalWithoutTag}</td>
-                  <td>{row.failurePercent}%</td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan="4">Sem dados.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <MiniReport title="Falhas por atendente" rows={attendants} labelKey="attendant" columns={tagColumns} />
+        <MiniReport title="Falhas por fila" rows={queues} labelKey="queue" columns={tagColumns} />
       </div>
     </section>
   );

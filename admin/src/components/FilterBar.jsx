@@ -1,80 +1,109 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { FileText, FileType2, Filter, RotateCcw } from "lucide-react";
 import { api } from "../services/api";
-import { formatDay, todayIsoDate } from "../services/datetime";
+import { addDays, formatDay, todayIsoDate } from "../services/datetime";
 
-// day = um dia so; startDate/endDate = periodo personalizado (De/Ate, ambos
-// inclusivos). Na API o dia tem prioridade, por isso a barra nunca deixa os dois
-// preenchidos ao mesmo tempo.
+// Recorte das telas: um periodo (startDate ate endDate, inclusivos; o mesmo dia
+// nos dois = um dia so) e, se quiser, um ou mais atendentes, fila, empresa e
+// cliente. attendant e sempre uma lista.
 export const emptyFilters = {
-  day: "",
   startDate: "",
   endDate: "",
-  attendant: "",
+  attendant: [],
   queue: "",
   company: "",
   clientName: ""
 };
 
-// Chaves de recorte que o servidor aceita (ai.service.cleanFilters). startDate/
-// endDate nao tem campo na barra, mas chegam nos filtros gravados junto do
-// resumo — entram aqui para a comparacao nao ignora-los.
-const FILTER_KEYS = ["day", "startDate", "endDate", "attendant", "queue", "company", "clientName"];
+const TEXT_KEYS = ["queue", "company", "clientName"];
+
+// Resumos de IA gravados antes do periodo unico trazem `day` e `attendant` em
+// texto: viram startDate/endDate e lista.
+export function normalizeFilters(filters) {
+  const source = filters || {};
+  const day = String(source.day || "").trim();
+  return {
+    ...emptyFilters,
+    startDate: day || String(source.startDate || "").trim(),
+    endDate: day || String(source.endDate || "").trim(),
+    attendant: toList(source.attendant),
+    queue: String(source.queue || "").trim(),
+    company: String(source.company || "").trim(),
+    clientName: String(source.clientName || "").trim()
+  };
+}
+
+function toList(value) {
+  const items = Array.isArray(value) ? value : [value];
+  return [...new Set(items.map((item) => String(item || "").trim()).filter(Boolean))];
+}
 
 // Recorte padrao de quem precisa falar do agora (pagina de IA): o dia corrente.
-// Sem dia, a consulta varre TODO o historico e o resumo sai misturando semanas.
+// Sem periodo, a consulta varre TODO o historico e o resumo sai misturando semanas.
 export function todayFilters() {
-  return { ...emptyFilters, day: todayIsoDate() };
-}
-
-const DESCRIPTION_LABELS = {
-  attendant: "Atendente",
-  company: "Empresa",
-  queue: "Fila",
-  clientName: "Cliente"
-};
-
-// Resume os filtros ativos para o cabecalho do PDF/DOCX exportado.
-export function describeFilters(filters) {
-  const parts = [];
-  if (String(filters?.day || "").trim()) {
-    parts.push(`Dia: ${formatDay(filters.day)}`);
-  } else {
-    const start = String(filters?.startDate || "").trim();
-    const end = String(filters?.endDate || "").trim();
-    if (start && end) parts.push(`Periodo: ${formatDay(start)} a ${formatDay(end)}`);
-    else if (start) parts.push(`A partir de: ${formatDay(start)}`);
-    else if (end) parts.push(`Ate: ${formatDay(end)}`);
-  }
-  for (const [key, label] of Object.entries(DESCRIPTION_LABELS)) {
-    if (String(filters?.[key] || "").trim()) parts.push(`${label}: ${filters[key]}`);
-  }
-  return parts.length ? parts.join("  |  ") : "Sem filtros aplicados";
-}
-
-// Periodo com o inicio depois do fim: a API nao devolveria nada.
-export function isInvertedRange(filters) {
-  const start = String(filters.startDate || "");
-  const end = String(filters.endDate || "");
-  return Boolean(start && end && start > end);
+  const today = todayIsoDate();
+  return { ...emptyFilters, startDate: today, endDate: today };
 }
 
 // Dois recortes sao o mesmo quando todos os campos batem. Campo vazio e campo
 // ausente contam como iguais: o servidor grava apenas os preenchidos.
 export function sameFilters(left, right) {
-  return FILTER_KEYS.every((key) => String(left?.[key] || "").trim() === String(right?.[key] || "").trim());
+  const a = normalizeFilters(left);
+  const b = normalizeFilters(right);
+  return (
+    a.startDate === b.startDate &&
+    a.endDate === b.endDate &&
+    toList(a.attendant).sort().join("|") === toList(b.attendant).sort().join("|") &&
+    TEXT_KEYS.every((key) => a[key] === b[key])
+  );
 }
 
-const emptyOptions = {
-  attendants: [],
-  queues: [],
-  companies: [],
-  clients: []
-};
+// Periodo com o inicio depois do fim: a API nao devolveria nada.
+export function isInvertedRange(filters) {
+  const start = String(filters?.startDate || "");
+  const end = String(filters?.endDate || "");
+  return Boolean(start && end && start > end);
+}
 
-// Barra unica de filtros usada pelo dashboard, relatorios e inatividade.
-// Os campos sao input + datalist: o valor vem sugerido a partir do que existe
-// no banco, mas continua aceitando busca parcial digitada a mao.
+const BASE_LABELS = { queue: "Fila", company: "Empresa", clientName: "Cliente" };
+
+// Resume os filtros ativos para o cabecalho do PDF/DOCX exportado. extraLabels
+// acrescenta campos de uma pagina especifica ({ desfecho: "Desfecho" }).
+export function describeFilters(filters, extraLabels = {}) {
+  const current = normalizeFilters(filters);
+  const parts = [];
+
+  if (current.startDate && current.startDate === current.endDate) {
+    parts.push(`Dia: ${formatDay(current.startDate)}`);
+  } else if (current.startDate && current.endDate) {
+    parts.push(`Periodo: ${formatDay(current.startDate)} a ${formatDay(current.endDate)}`);
+  } else if (current.startDate) {
+    parts.push(`A partir de: ${formatDay(current.startDate)}`);
+  } else if (current.endDate) {
+    parts.push(`Ate: ${formatDay(current.endDate)}`);
+  }
+
+  if (current.attendant.length) {
+    parts.push(`${current.attendant.length > 1 ? "Atendentes" : "Atendente"}: ${current.attendant.join(", ")}`);
+  }
+  for (const [key, label] of Object.entries({ ...BASE_LABELS, ...extraLabels })) {
+    const value = String(filters?.[key] ?? "").trim();
+    if (value) parts.push(`${label}: ${value}`);
+  }
+  return parts.length ? parts.join("  |  ") : "Sem filtros aplicados";
+}
+
+const PRESETS = [
+  { label: "Hoje", days: 0 },
+  { label: "7 dias", days: 6 },
+  { label: "30 dias", days: 29 }
+];
+
+const emptyOptions = { attendants: [], queues: [], companies: [], clients: [] };
+
+// Barra unica de filtros usada pelo dashboard, relatorios, inatividade, IA e
+// atendimento. Fila, empresa e cliente sao input + datalist (sugestao do que
+// existe no banco, mas aceita busca parcial); atendente e uma lista com marcas.
 export default function FilterBar({
   filters,
   onChange,
@@ -86,17 +115,16 @@ export default function FilterBar({
 }) {
   const [options, setOptions] = useState(emptyOptions);
   const listId = useId();
-
   const startDate = filters.startDate || "";
   const endDate = filters.endDate || "";
   const invertedRange = isInvertedRange(filters);
 
-  // As opcoes dependem so do recorte de datas: filtrar por atendente nao pode
-  // sumir com as empresas disponiveis na lista.
+  // As opcoes dependem so do periodo: filtrar por atendente nao pode sumir com
+  // as empresas disponiveis na lista.
   useEffect(() => {
     let active = true;
     api
-      .filterOptions({ day: filters.day, startDate, endDate })
+      .filterOptions({ startDate, endDate })
       .then((data) => {
         if (active) setOptions({ ...emptyOptions, ...data });
       })
@@ -106,7 +134,7 @@ export default function FilterBar({
     return () => {
       active = false;
     };
-  }, [filters.day, startDate, endDate]);
+  }, [startDate, endDate]);
 
   function handleSubmit(event) {
     event.preventDefault();
@@ -114,70 +142,55 @@ export default function FilterBar({
     onApply(filters);
   }
 
-  // Dia e periodo se excluem: escolher um limpa o outro.
-  function changeDay(value) {
-    onChange("day", value);
-    if (value) {
-      onChange("startDate", "");
-      onChange("endDate", "");
-    }
-  }
-
-  function changePeriod(key, value) {
-    onChange(key, value);
-    if (value) onChange("day", "");
+  function applyPreset(days) {
+    onChange("startDate", addDays(todayIsoDate(), -days));
+    onChange("endDate", todayIsoDate());
   }
 
   return (
     <form className="filters" onSubmit={handleSubmit}>
       <label>
-        Dia
-        <input type="date" value={filters.day || ""} onChange={(event) => changeDay(event.target.value)} />
-      </label>
-      <label>
-        Periodo: de
+        De
         <input
           type="date"
           value={startDate}
           max={endDate || undefined}
-          onChange={(event) => changePeriod("startDate", event.target.value)}
+          onChange={(event) => onChange("startDate", event.target.value)}
         />
       </label>
       <label>
-        Periodo: ate
+        Ate
         <input
           type="date"
           value={endDate}
           min={startDate || undefined}
-          onChange={(event) => changePeriod("endDate", event.target.value)}
+          onChange={(event) => onChange("endDate", event.target.value)}
         />
       </label>
 
-      <ComboField
-        label="Atendente"
-        listId={`${listId}-attendant`}
-        value={filters.attendant}
+      <AttendantPicker
+        value={toList(filters.attendant)}
         options={options.attendants}
         onChange={(value) => onChange("attendant", value)}
       />
       <ComboField
         label="Empresa"
         listId={`${listId}-company`}
-        value={filters.company}
+        value={filters.company || ""}
         options={options.companies}
         onChange={(value) => onChange("company", value)}
       />
       <ComboField
         label="Fila"
         listId={`${listId}-queue`}
-        value={filters.queue}
+        value={filters.queue || ""}
         options={options.queues}
         onChange={(value) => onChange("queue", value)}
       />
       <ComboField
         label="Cliente"
         listId={`${listId}-client`}
-        value={filters.clientName}
+        value={filters.clientName || ""}
         options={options.clients}
         onChange={(value) => onChange("clientName", value)}
       />
@@ -197,6 +210,11 @@ export default function FilterBar({
           <RotateCcw aria-hidden="true" size={17} />
           Limpar
         </button>
+        {PRESETS.map((preset) => (
+          <button key={preset.label} className="secondary-button" type="button" onClick={() => applyPreset(preset.days)}>
+            {preset.label}
+          </button>
+        ))}
         {onExportPdf ? (
           <button className="secondary-button" type="button" onClick={onExportPdf} disabled={exportDisabled}>
             <FileText aria-hidden="true" size={17} />
@@ -211,6 +229,64 @@ export default function FilterBar({
         ) : null}
       </div>
     </form>
+  );
+}
+
+// Varios atendentes no mesmo filtro: lista com marcas num painel que fecha ao
+// clicar fora. Nada marcado = todos.
+function AttendantPicker({ value, options, onChange }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function close(event) {
+      if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  // Mantem marcado o que ja esta no filtro mesmo que a lista nao o traga.
+  const names = [...new Set([...options, ...value])].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  const summary = !value.length ? "Todos" : value.length === 1 ? value[0] : `${value.length} atendentes`;
+
+  function toggle(name) {
+    onChange(value.includes(name) ? value.filter((item) => item !== name) : [...value, name]);
+  }
+
+  return (
+    <div className="field multi-select" ref={rootRef}>
+      <span>Atendente</span>
+      <button
+        type="button"
+        className="multi-select__button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {summary}
+      </button>
+      {open ? (
+        <div className="multi-select__panel" role="listbox" aria-multiselectable="true">
+          {names.length ? (
+            names.map((name) => (
+              <label key={name} className="checkbox-field">
+                <input type="checkbox" checked={value.includes(name)} onChange={() => toggle(name)} />
+                {name}
+              </label>
+            ))
+          ) : (
+            <p className="table-note">Sem atendentes no periodo.</p>
+          )}
+          {value.length ? (
+            <button type="button" className="secondary-button" onClick={() => onChange([])}>
+              Limpar selecao
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
