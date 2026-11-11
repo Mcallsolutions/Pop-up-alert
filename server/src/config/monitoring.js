@@ -82,6 +82,16 @@ function getServiceStandardZeroMinutes() {
   return configured > record ? configured : fallback;
 }
 
+// Peso da INATIVIDADE (em %) no "Resultados" (ver results.js); a TAG leva o
+// resto. Tem de ficar acima de 50 (inatividade pesa mais) e abaixo de 100: fora
+// disso volta ao padrao.
+const DEFAULT_RESULT_INACTIVITY_WEIGHT = 70;
+
+function getResultInactivityWeight() {
+  const configured = readPositiveInteger(process.env.RESULT_INACTIVITY_WEIGHT, DEFAULT_RESULT_INACTIVITY_WEIGHT);
+  return configured > 50 && configured < 100 ? configured : DEFAULT_RESULT_INACTIVITY_WEIGHT;
+}
+
 function getTimeZone() {
   return String(process.env.MONITOR_TIME_ZONE || "").trim() || DEFAULT_TIME_ZONE;
 }
@@ -232,6 +242,7 @@ module.exports = {
   getMissingTagListDays,
   getMtalkConfig,
   getReportCacheTtlMs,
+  getResultInactivityWeight,
   getRetentionDays,
   getServiceStandardZeroMinutes,
   getTimeZone,

@@ -91,6 +91,9 @@ export const api = {
   serviceStandard(filters = {}) {
     return request(`/api/reports/service-standard${toQuery(filters)}`);
   },
+  results(filters = {}) {
+    return request(`/api/reports/results${toQuery(filters)}`);
+  },
   byAttendant(filters = {}) {
     return request(`/api/reports/by-attendant${toQuery(filters)}`);
   },
