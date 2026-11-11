@@ -2,8 +2,10 @@ const { getDatabase } = require("../database");
 const {
   getInactivityRecordMinutes,
   getInactivityThresholdMinutes,
+  getResultInactivityWeight,
   getServiceStandardZeroMinutes
 } = require("../config/monitoring");
+const { buildResults } = require("./results");
 const { buildServiceStandard } = require("./service-standard");
 const { getAllowedQueues } = require("./queue-filter");
 const { normalizeAttendantName } = require("./attendant-filter");
@@ -409,6 +411,27 @@ async function getInactivityGroupedBy(filters, expression, alias, extraCondition
 // Padrao de atendimento (service-standard.js): nota de 0 a 100 por ticket que
 // junta inatividade e TAG, em media geral e por atendente.
 async function getServiceStandard(filters = {}) {
+  const tickets = await loadStandardTickets(filters);
+  return buildServiceStandard(tickets, {
+    thresholdMinutes: INACTIVITY_THRESHOLD_MINUTES,
+    zeroMinutes: getServiceStandardZeroMinutes()
+  });
+}
+
+// Resultados (results.js): porcentagem de acerto por contagem de falhas de
+// inatividade e de TAG sobre os atendimentos, geral (todas as filas) e por
+// atendente. Parte dos mesmos tickets do padrao de atendimento.
+async function getResults(filters = {}) {
+  const tickets = await loadStandardTickets(filters);
+  return buildResults(tickets, {
+    thresholdMinutes: INACTIVITY_THRESHOLD_MINUTES,
+    inactivityWeight: getResultInactivityWeight()
+  });
+}
+
+// De cada ticket identificado: a maior parada do periodo e se a leitura mais
+// recente tem TAG.
+async function loadStandardTickets(filters) {
   const database = await getDatabase();
   const { params, standardSql } = buildTicketFilters(filters);
   const rows = await database
@@ -427,17 +450,12 @@ async function getServiceStandard(filters = {}) {
     )
     .all(...params);
 
-  const tickets = rows.map((row) => ({
+  return rows.map((row) => ({
     attendant: row.attendant,
     inactivityMinutes: Number(row.inactivityMinutes || 0),
     hasResponsible: Boolean(row.attendant),
     hasTag: row.tagStatus === "COM_TAG"
   }));
-
-  return buildServiceStandard(tickets, {
-    thresholdMinutes: INACTIVITY_THRESHOLD_MINUTES,
-    zeroMinutes: getServiceStandardZeroMinutes()
-  });
 }
 
 async function getReportByAttendant(filters = {}) {
@@ -743,6 +761,7 @@ module.exports = {
   getInactivityByAttendant,
   getInactivityByCompany,
   getServiceStandard,
+  getResults,
   getReportByAttendant,
   getReportByQueue
 };

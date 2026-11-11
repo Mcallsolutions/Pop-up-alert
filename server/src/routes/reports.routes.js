@@ -11,6 +11,7 @@ const {
   getInactivityByAttendant,
   getInactivityByCompany,
   getServiceStandard,
+  getResults,
   getReportByAttendant,
   getReportByQueue
 } = require("../services/report.service");
@@ -40,6 +41,9 @@ router.get(
 );
 // Padrao de atendimento: porcentagem que junta TAG e inatividade (service-standard.js).
 router.get("/service-standard", cachedReport("service-standard", getServiceStandard));
+// Resultados: % de acerto por falhas de inatividade (peso maior) e de TAG sobre
+// os atendimentos, geral e por atendente (results.js).
+router.get("/results", cachedReport("results", getResults));
 router.get("/inactivity/by-attendant", cachedReport("inactivity-by-attendant", getInactivityByAttendant));
 router.get("/inactivity/by-company", cachedReport("inactivity-by-company", getInactivityByCompany));
 router.get("/by-attendant", cachedReport("by-attendant", getReportByAttendant));

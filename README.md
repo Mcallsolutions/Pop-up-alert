@@ -297,6 +297,12 @@ Relatorios (todos aceitam o periodo `startDate`/`endDate` (`YYYY-MM-DD`, inclusi
   50% pela inatividade e 50% pela TAG: ate `INACTIVITY_THRESHOLD_MINUTES` parado a nota e 100 e depois cai em linha
   reta ate zerar em `SERVICE_STANDARD_ZERO_MINUTES` (padrao 4x o limite); sem TAG a parte da TAG vale 0. Ticket sem
   atendente so conta pela inatividade. A parada de cada ticket e a maior do periodo
+- `GET /api/reports/results` — **resultados**: % de acerto por contagem de falhas, geral (todas as filas unificadas) e
+  por atendente. `atendimentos` = tickets avaliados; falha de inatividade = ticket parado alem de
+  `INACTIVITY_RECORD_MINUTES`; falha de TAG = ticket com atendente e sem TAG (ticket aguardando atendente nao entra na
+  TAG). Acerto = `1 - falhas / atendimentos` em cada metrica, e o resultado e a media ponderada, com a inatividade
+  pesando mais (`RESULT_INACTIVITY_WEIGHT`, padrao **70**% inatividade e 30% TAG). Sem ticket com atendente, vale so
+  a inatividade; sem ticket nenhum, `percent` e `null`
 - `GET /api/reports/inactivity/by-attendant`
 - `GET /api/reports/inactivity/by-company`
 

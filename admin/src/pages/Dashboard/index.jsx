@@ -4,6 +4,7 @@ import FilterBar, { emptyFilters } from "../../components/FilterBar";
 import AiSummaryCard from "../../components/AiSummaryCard";
 import Metric from "../../components/Metric";
 import MiniReport, { tagColumns } from "../../components/MiniReport";
+import ResultsPanel from "../../components/ResultsPanel";
 import { api } from "../../services/api";
 import { formatDateTime, formatTime } from "../../services/datetime";
 import { readPageCache, writePageCache } from "../../services/page-cache";
@@ -28,6 +29,8 @@ export default function Dashboard() {
   // Padrao de atendimento (TAG + inatividade). Dado guardado antes dele existir
   // nao tem o campo: fica "-" ate a proxima atualizacao.
   const [standard, setStandard] = useState(cached?.data.standard || null);
+  // Resultados (% de acerto por falhas). Cache antigo nao tem o campo.
+  const [results, setResults] = useState(cached?.data.results || null);
   const [loadedAt, setLoadedAt] = useState(cached?.loadedAt || 0);
   // Ultima tentativa, com ou sem sucesso: a proxima atualizacao conta dela, para
   // a API fora do ar nao virar uma tentativa por segundo.
@@ -54,11 +57,12 @@ export default function Dashboard() {
     try {
       // O resumo da IA e apenas leitura aqui: quem gera um novo e a pagina "IA".
       // Uma falha nele nao pode derrubar o dashboard inteiro.
-      const [summaryData, attendantData, queueData, standardData, aiSummaryData] = await Promise.all([
+      const [summaryData, attendantData, queueData, standardData, resultsData, aiSummaryData] = await Promise.all([
         api.summary(query),
         api.byAttendant(query),
         api.byQueue(query),
         api.serviceStandard(query),
+        api.results(query),
         api.latestAiSummary().catch(() => null)
       ]);
       if (requestId !== requestRef.current) return;
@@ -68,6 +72,7 @@ export default function Dashboard() {
         attendants: attendantData.items || [],
         queues: queueData.items || [],
         standard: standardData,
+        results: resultsData,
         aiSummary: aiSummaryData
       };
       const now = Date.now();
@@ -75,6 +80,7 @@ export default function Dashboard() {
       setAttendants(data.attendants);
       setQueues(data.queues);
       setStandard(data.standard);
+      setResults(data.results);
       setAiSummary(data.aiSummary);
       setLoadedAt(now);
       writePageCache(CACHE_NAME, { filters: activeFilters, data, loadedAt: now });
@@ -172,6 +178,8 @@ export default function Dashboard() {
         <Metric label="Leituras recebidas" value={summary?.totalReadings || 0} />
         <Metric label="Ultima coleta" value={formatDateTime(summary?.lastCollectedAt)} compact />
       </div>
+
+      <ResultsPanel results={results} loading={loading} />
 
       <AiSummaryCard
         summary={aiSummary}
