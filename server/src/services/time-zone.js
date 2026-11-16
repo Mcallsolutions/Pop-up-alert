@@ -47,11 +47,18 @@ function formatTime(date, timeZone = getTimeZone()) {
   return `${parts.hour}:${parts.minute}`;
 }
 
+// Minutos desde a meia-noite no fuso da operacao (08:15 = 495).
+function minutesOfDay(date, timeZone = getTimeZone()) {
+  const parts = readParts(date, timeZone);
+  return Number(parts.hour) * 60 + Number(parts.minute);
+}
+
 function pad(value) {
   return String(value).padStart(2, "0");
 }
 
 module.exports = {
   formatTime,
+  minutesOfDay,
   toZonedIso
 };

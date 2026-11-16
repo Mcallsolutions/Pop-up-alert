@@ -163,7 +163,22 @@ const WHATSAPP_PROVIDERS = ["evolution", "waha", "callmebot"];
 const DEFAULT_WHATSAPP_MAX_PER_HOUR = 20;
 const DEFAULT_WHATSAPP_TIMEOUT_MS = 10000;
 
+// "HH:MM" -> minutos desde a meia-noite; invalido volta ao padrao.
+function readClockMinutes(value, fallback) {
+  const match = String(value ?? "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return fallback;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours <= 24 && minutes < 60 && hours * 60 + minutes <= 24 * 60 ? hours * 60 + minutes : fallback;
+}
+
+function formatClock(totalMinutes) {
+  return `${String(Math.floor(totalMinutes / 60) % 24).padStart(2, "0")}:${String(totalMinutes % 60).padStart(2, "0")}`;
+}
+
 function getWhatsappConfig() {
+  const activeFromMinutes = readClockMinutes(process.env.WHATSAPP_ACTIVE_FROM, 8 * 60);
+  const activeToMinutes = readClockMinutes(process.env.WHATSAPP_ACTIVE_TO, 22 * 60);
   const provider = String(process.env.WHATSAPP_PROVIDER || "").trim().toLowerCase() || "evolution";
 
   return {
@@ -184,6 +199,11 @@ function getWhatsappConfig() {
     // Zero: um aviso por parada. Com valor, repete o aviso enquanto o ticket
     // continuar parado.
     reminderMinutes: readNonNegativeInteger(process.env.WHATSAPP_REMINDER_MINUTES, 0),
+    // Janela de envio (hora do MONITOR_TIME_ZONE): fora dela nada sai. Padrao
+    // 08:00 as 22:00. Inicio igual ao fim deixa o dia todo liberado.
+    activeFromMinutes,
+    activeToMinutes,
+    activeWindow: `${formatClock(activeFromMinutes)}-${formatClock(activeToMinutes)}`,
     // Mensagens por destinatario por hora (aviso + teste). Zero pausa os avisos.
     maxPerHour: readNonNegativeInteger(process.env.WHATSAPP_MAX_PER_HOUR, DEFAULT_WHATSAPP_MAX_PER_HOUR),
     timeoutMs: readPositiveInteger(process.env.WHATSAPP_TIMEOUT_MS, DEFAULT_WHATSAPP_TIMEOUT_MS)

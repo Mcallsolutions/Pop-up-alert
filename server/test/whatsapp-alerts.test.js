@@ -21,7 +21,9 @@ const ENV_KEYS = [
   "WHATSAPP_RECIPIENTS",
   "WHATSAPP_INCLUDE_CLIENT_NAME",
   "WHATSAPP_REMINDER_MINUTES",
-  "WHATSAPP_MAX_PER_HOUR"
+  "WHATSAPP_MAX_PER_HOUR",
+  "WHATSAPP_ACTIVE_FROM",
+  "WHATSAPP_ACTIVE_TO"
 ];
 
 const EVOLUTION = {
@@ -49,7 +51,8 @@ function ticket(id, minutes, extra = {}) {
 function setup(t, env, respond = () => new Response(JSON.stringify({ ok: true }), { status: 201 })) {
   const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
   for (const key of ENV_KEYS) delete process.env[key];
-  Object.assign(process.env, env);
+  // Dia todo liberado: os testes usam Date.now() e nao dependem da hora de rodar.
+  Object.assign(process.env, { WHATSAPP_ACTIVE_FROM: "00:00", WHATSAPP_ACTIVE_TO: "00:00" }, env);
 
   const calls = [];
   const originalFetch = globalThis.fetch;
@@ -218,4 +221,27 @@ test("mensagem corta a lista longa e mascara destinatarios", () => {
   assert.match(texto, /Parados agora: 13/);
   assert.equal(maskRecipient("5511999990001:segredo"), "••••••••0001");
   assert.equal(maskRecipient("120363000000000001@g.us"), "grupo …0001");
+});
+
+test("janela de envio: so entre 08:00 e 22:00 (hora de Sao Paulo), sem marcar como avisado fora dela", async (t) => {
+  const calls = setup(t, {
+    ...EVOLUTION,
+    WHATSAPP_RECIPIENTS: "5511999990001",
+    WHATSAPP_ACTIVE_FROM: "08:00",
+    WHATSAPP_ACTIVE_TO: "22:00"
+  });
+  const parados = [ticket(1, 40)];
+
+  // 07:59 e 22:00 em Sao Paulo (UTC-3): fora.
+  await startWhatsappAlerts({ tickets: parados, thresholdMinutes: 15, now: new Date("2026-11-03T10:59:00Z") });
+  await startWhatsappAlerts({ tickets: parados, thresholdMinutes: 15, now: new Date("2026-11-04T01:00:00Z") });
+  assert.equal(calls.length, 0);
+
+  // 08:00: abre e o ticket que ficou parado a noite toda entra no primeiro aviso.
+  await startWhatsappAlerts({ tickets: parados, thresholdMinutes: 15, now: new Date("2026-11-03T11:00:00Z") });
+  assert.equal(calls.length, 1);
+
+  // 21:59: ainda dentro.
+  await startWhatsappAlerts({ tickets: [ticket(2, 40)], thresholdMinutes: 15, now: new Date("2026-11-04T00:59:00Z") });
+  assert.equal(calls.length, 2);
 });

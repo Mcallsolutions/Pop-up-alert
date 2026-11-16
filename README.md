@@ -574,6 +574,7 @@ No CallMeBot, `WHATSAPP_RECIPIENTS` leva `telefone:apikey` de cada pessoa (`5511
 | `WHATSAPP_RECIPIENTS` | — | numeros com DDI ou grupos `...@g.us`, separados por virgula |
 | `WHATSAPP_INCLUDE_CLIENT_NAME` | `0` | `1` poe o nome do cliente na mensagem |
 | `WHATSAPP_REMINDER_MINUTES` | `0` | repete o aviso a cada N min enquanto o ticket continuar parado |
+| `WHATSAPP_ACTIVE_FROM` / `WHATSAPP_ACTIVE_TO` | `08:00` / `22:00` | janela de envio (hora de `MONITOR_TIME_ZONE`): fora dela nenhum aviso sai; quem continuar parado quando ela abre entra no primeiro aviso. O botao "Enviar teste" ignora a janela |
 | `WHATSAPP_MAX_PER_HOUR` | `20` | mensagens por destinatario por hora (`0` pausa os avisos) |
 | `WHATSAPP_TIMEOUT_MS` | `10000` | tempo maximo de cada envio |
 

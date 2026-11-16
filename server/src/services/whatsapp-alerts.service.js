@@ -21,7 +21,7 @@
 // nunca aparecem em log nem no painel inteiros.
 
 const { getWhatsappConfig } = require("../config/monitoring");
-const { formatTime } = require("./time-zone");
+const { formatTime, minutesOfDay } = require("./time-zone");
 
 const HOUR_MS = 60 * 60 * 1000;
 const FAILURE_COOLDOWN_MS = 5 * 60 * 1000;
@@ -61,6 +61,12 @@ async function notifyInactiveTickets({ config, tickets, thresholdMinutes, now })
   const problem = describeConfigProblem(config);
   if (problem) {
     lastSend = { em: now.toISOString(), ok: false, erro: problem, tickets: 0 };
+    return null;
+  }
+
+  // Fora da janela nada sai e nada e marcado como avisado: quem continuar
+  // parado quando ela abrir entra no primeiro aviso do dia.
+  if (!isInsideActiveWindow(config, now)) {
     return null;
   }
 
@@ -121,6 +127,15 @@ async function notifyInactiveTickets({ config, tickets, thresholdMinutes, now })
     falhas: result.falhas
   };
   return lastSend;
+}
+
+// Inicio inclusivo, fim exclusivo (08:00 ate 21:59). Janela que atravessa a
+// meia-noite (ex.: 22:00 ate 06:00) tambem funciona.
+function isInsideActiveWindow(config, now) {
+  const { activeFromMinutes: from, activeToMinutes: to } = config;
+  if (from === to) return true;
+  const current = minutesOfDay(now);
+  return from < to ? current >= from && current < to : current >= from || current < to;
 }
 
 // Botao "Enviar teste" do painel. Conta no limite da hora, mas nao e barrado
@@ -324,6 +339,8 @@ function describeWhatsappStatus() {
     destinatarios: config.recipients.map(maskRecipient),
     incluiNomeCliente: config.includeClientName,
     lembreteMinutos: config.reminderMinutes,
+    janelaEnvio: config.activeWindow,
+    dentroDaJanela: isInsideActiveWindow(config, new Date()),
     orcamentoHora: { usadas: sentRounds.length, limite: config.maxPerHour },
     ticketsAvisados: notified.size,
     aguardandoAposFalhaAte: cooldownUntil > agora ? new Date(cooldownUntil).toISOString() : null,
